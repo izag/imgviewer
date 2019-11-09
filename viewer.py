@@ -57,11 +57,12 @@ class MainWindow:
         self.original_image = None
         self.original_image_name = None
         self.main_image = None
+        self.main_image_orig = None
+        self.resized = False
+        self.thumb_prefix = None
 
         frm_top = Frame(root)
         frm_main = ScrollFrame(root)
-        # frm_main.canvas.config(width=200, height=200)
-        # frm_main.view_port.config(width=200, height=200)
         frm_status = Frame(root)
 
         frm_center = Frame(frm_main.view_port)
@@ -85,17 +86,17 @@ class MainWindow:
         self.btn_paste = Button(frm_top, text="Paste", command=self.paste_from_clipboard)
         self.btn_paste.pack(side=LEFT)
 
+        self.btn_update = Button(frm_top, text="Load image", command=self.load_image_from_input)
+        self.btn_update.pack(side=LEFT)
+
         self.cb_url = ttk.Combobox(frm_top, width=100)
         self.cb_url.bind("<FocusIn>", self.focus_callback)
         # self.cb_url.bind("<Button-1>", self.drop_down_callback)
         self.cb_url.bind('<Return>', self.enter_callback)
         self.cb_url.pack(side=LEFT)
 
-        self.btn_update = Button(frm_top, text="Load image", command=self.load_image_from_input)
-        self.btn_update.pack(side=LEFT)
-
-        self.image_label = Label(frm_image)
-        self.image_label.pack()
+        self.btn_image = Button(frm_image, command=self.resize_image)
+        self.btn_image.pack()
 
         self.left_buttons = self.fill_panel(frm_left)
         self.right_buttons = self.fill_panel(frm_right)
@@ -135,11 +136,9 @@ class MainWindow:
             self.set_undefined_state()
             return False
 
-        found = re.search(r"https?://" + self.provider.get_domen() + r"\.[a-z]+/(.+?)(?:/|$)", input_url)
-        if (found is None) or (found.group(0) is None):
+        ident = self.get_id(input_url)
+        if ident is None:
             return False
-
-        ident = found.group(1)
 
         input_url = "https://" + self.provider.get_host() + "/" + ident
 
@@ -182,19 +181,15 @@ class MainWindow:
                 with open('3.html', 'w') as f:
                     f.write(html)
 
-            # executor.submit(self.save_to_file, ts)
-            prev_url = self.provider.get_prev_url(html)
-            self.btn_prev.link = prev_url
-            self.btn_prev.config(command=partial(self.load_image, prev_url))
-            next_url = self.provider.get_next_url(html)
-            self.btn_next.link = next_url
-            self.btn_next.config(command=partial(self.load_image, next_url))
+            thumb_url = self.provider.get_thumb(html)
+            slash_pos = thumb_url.rfind('/')
+            self.thumb_prefix = thumb_url[: slash_pos + 1]
 
-            tb_author = self.provider.get_more_from_author(html)
-            tb_gallery = self.provider.get_more_from_gallery(html)
+            self.reconfigure_prev_button(http_session, html)
+            self.reconfigure_next_button(http_session, html)
 
-            executor.submit(self.provider.reconfigure_buttons, self, self.left_buttons, tb_author)
-            executor.submit(self.provider.reconfigure_buttons, self, self.right_buttons, tb_gallery)
+            executor.submit(self.reconfigure_left_buttons, html)
+            executor.submit(self.reconfigure_right_buttons, html)
 
             image_url = self.provider.get_image_url(html)
             response = http_session.get(image_url, timeout=TIMEOUT)
@@ -212,8 +207,13 @@ class MainWindow:
             w, h = img.size
             k = MAIN_IMG_WIDTH / w
             img_resized = img.resize((MAIN_IMG_WIDTH, int(h * k)))
+
+            root.title(f"{root.title()} ({w}x{h})")
+
+            self.resized = True
+            self.main_image_orig = ImageTk.PhotoImage(img)
             self.main_image = ImageTk.PhotoImage(img_resized)
-            self.image_label.config(image=self.main_image)
+            self.btn_image.config(image=self.main_image)
         except BaseException as error:
             root.after_idle(self.set_undefined_state)
             print("Exception URL: " + input_url)
@@ -234,7 +234,7 @@ class MainWindow:
         self.cb_url.event_generate('<Down>')
 
     def enter_callback(self, event):
-        self.load_image()
+        self.load_image_from_input()
 
     def on_close(self):
         global root
@@ -248,7 +248,7 @@ class MainWindow:
         self.main_image = None
         self.original_image = None
         self.original_image_name = None
-        self.image_label.config(image=None)
+        self.btn_image.config(image=None)
         root.title(None)
         self.btn_prev.config(image=None, command=None)
         self.btn_next.config(image=None, command=None)
@@ -289,6 +289,48 @@ class MainWindow:
                 buttons.append(btn)
 
         return buttons
+
+    def resize_image(self):
+        self.btn_image.config(image=(self.main_image_orig if self.resized else self.main_image))
+        self.resized = not self.resized
+
+    def get_id(self, url):
+        found = re.search(r"https?://" + self.provider.get_domen() + r"\.[a-z]+/(.+?)(?:/|$)", url)
+        if (found is None) or (found.group(0) is None):
+            return None
+
+        return found.group(1)
+
+    def reconfigure_left_buttons(self, html):
+        tab = self.provider.get_more_from_author(html)
+        self.provider.reconfigure_buttons(self, self.left_buttons, tab)
+
+    def reconfigure_right_buttons(self, html):
+        tab = self.provider.get_more_from_gallery(html)
+        self.provider.reconfigure_buttons(self, self.right_buttons, tab)
+
+    def reconfigure_prev_button(self, http_session, html):
+        url = self.provider.get_prev_url(html)
+        ident = self.get_id(url)
+        img_url = self.thumb_prefix + ident + '_t.jpg'
+        self.reconfigure_button(http_session, self.btn_prev, url, img_url)
+
+    def reconfigure_next_button(self, http_session, html):
+        url = self.provider.get_next_url(html)
+        ident = self.get_id(url)
+        img_url = self.thumb_prefix + ident + '_t.jpg'
+        self.reconfigure_button(http_session, self.btn_next, url, img_url)
+
+    def reconfigure_button(self, http_session, btn, url, img_url):
+        btn.link = url
+        btn.config(command=partial(self.load_image, url))
+
+        photo_image = download_image(http_session, img_url)
+        if photo_image is None:
+            return
+
+        btn.config(image=photo_image)
+        btn.image = photo_image
 
 
 class ScrollFrame(Frame):
@@ -404,7 +446,7 @@ class AbstractProvider(ABC):
         pass
 
     @abstractmethod
-    def reconfigure_buttons(self, buttons, html):
+    def reconfigure_buttons(self, win, buttons, html):
         pass
 
     def search(self, pattern, string):
@@ -413,6 +455,10 @@ class AbstractProvider(ABC):
             return ""
 
         return found.group(1)
+
+    @abstractmethod
+    def get_thumb(self, html):
+        pass
 
 
 class ImgRock(AbstractProvider):
@@ -478,15 +524,7 @@ class ImgRock(AbstractProvider):
         try:
             i = 0
             for m in re.finditer('<td>.*?href="(.*?)".*?src="(.*?)".*?</td>', html, re.MULTILINE | re.DOTALL):
-                btn = buttons[i]
-                btn.link = m.group(1)
-                img_url = m.group(2)
-                photo_image = download_image(http_session, img_url)
-                if photo_image is not None:
-                    btn.config(image=photo_image,
-                               command=partial(win.load_image, btn.link))
-                    btn.image = photo_image
-
+                win.reconfigure_button(http_session, buttons[i], m.group(1), m.group(2))
                 i += 1
         except BaseException as error:
             print(error)
@@ -494,6 +532,9 @@ class ImgRock(AbstractProvider):
             return False
         finally:
             http_session.close()
+
+    def get_thumb(self, html):
+        return self.search('\[IMG\](.*?)\[/IMG\]', html)
 
 
 class HistoryWindow:
@@ -587,4 +628,3 @@ if __name__ == "__main__":
     root.geometry("800x600")
     main_win = MainWindow()
     root.mainloop()
-
