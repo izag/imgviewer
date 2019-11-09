@@ -31,6 +31,7 @@ TIMEOUT = (3.05, 9.05)
 PAD = 5
 IMG_WIDTH = 120
 MAIN_IMG_WIDTH = 450
+MAX_ERRORS = 5
 
 executor = ThreadPoolExecutor(max_workers=20)
 
@@ -62,12 +63,12 @@ class MainWindow:
         self.thumb_prefix = None
 
         frm_top = Frame(root)
-        frm_main = ScrollFrame(root)
+        self.frm_main = ScrollFrame(root)
         frm_status = Frame(root)
 
-        frm_center = Frame(frm_main.view_port)
-        frm_left = Frame(frm_main.view_port)
-        frm_right = Frame(frm_main.view_port)
+        frm_center = Frame(self.frm_main.view_port)
+        frm_left = Frame(self.frm_main.view_port)
+        frm_right = Frame(self.frm_main.view_port)
 
         frm_caption = Frame(frm_center)
         frm_image = Frame(frm_center)
@@ -118,7 +119,7 @@ class MainWindow:
         frm_right.pack(side=RIGHT, fill=BOTH, expand=1)
 
         frm_top.pack()
-        frm_main.pack(fill=BOTH, expand=1)
+        self.frm_main.pack(fill=BOTH, expand=1)
         frm_status.pack(fill=X)
 
     def load_image_from_input(self):
@@ -145,16 +146,25 @@ class MainWindow:
         root.title(input_url)
 
         try:
-            response = http_session.get(input_url, timeout=TIMEOUT)
-            if response.status_code == 404:
+            err_count = 0
+            while err_count < MAX_ERRORS:
+                response = http_session.get(input_url, timeout=TIMEOUT)
+                if response.status_code == 404:
+                    return False
+                html = response.content.decode('utf-8')
+
+                if DEBUG:
+                    with open('1.html', 'w') as f:
+                        f.write(html)
+
+                # sometimes this functions fails (i don't want to tamper with this)
+                redirect_url = self.provider.get_redirect_url(html)
+                if redirect_url is not None:
+                    break
+                err_count += 1
+
+            if err_count == MAX_ERRORS:
                 return False
-            html = response.content.decode('utf-8')
-
-            if DEBUG:
-                with open('1.html', 'w') as f:
-                    f.write(html)
-
-            redirect_url = self.provider.get_redirect_url(html)
 
             http_session.headers.update({'Referer': input_url})
             response = http_session.get(redirect_url, timeout=TIMEOUT)
@@ -293,6 +303,7 @@ class MainWindow:
     def resize_image(self):
         self.btn_image.config(image=(self.main_image_orig if self.resized else self.main_image))
         self.resized = not self.resized
+        self.frm_main.scroll_top_left()
 
     def get_id(self, url):
         found = re.search(r"https?://" + self.provider.get_domen() + r"\.[a-z]+/(.+?)(?:/|$)", url)
@@ -358,6 +369,8 @@ class ScrollFrame(Frame):
 
         # bind an event whenever the size of the viewPort frame changes.
         self.view_port.bind("<Configure>", self.on_frame_configure)
+        self.canvas.bind_all("<MouseWheel>", self.on_mousewheel_y)
+        self.canvas.bind_all("<Control-MouseWheel>", self.on_mousewheel_x)
 
         # perform an initial stretch on render, otherwise the scroll region has a tiny border until the first resize
         self.on_frame_configure(None)
@@ -366,6 +379,16 @@ class ScrollFrame(Frame):
         """Reset the scroll region to encompass the inner frame"""
         # whenever the size of the frame changes, alter the scroll region respectively.
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def on_mousewheel_x(self, event):
+        self.canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def on_mousewheel_y(self, event):
+        self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def scroll_top_left(self):
+        self.canvas.xview_moveto(0)
+        self.canvas.yview_moveto(0)
 
 
 class LinkButton(Button):
@@ -472,25 +495,27 @@ class ImgRock(AbstractProvider):
         return "imgrock"
 
     def get_redirect_url(self, html):
-        _0x92afb7 = self.search(r'_0x92afb7="(.*?)"', html)
-        _0x1cdcb3 = self.search(r'_0x1cdcb3="(.*?)"', html)
-        _0x31f1b4 = self.search(r'_0x31f1b4="(.*?)"', html)
-        _0x4817e7 = self.search(r'_0x4817e7="(.*?)"', html)
-        _0x2c6182 = self.search(r'_0x2c6182="(.*?)"', html)
-        _0x53e80d = self.search(r'_0x53e80d="(.*?)"', html)
-        _0x375c1e = self.search(r'_0x375c1e="(.*?)"', html)
-        _0x16777a = self.search(r'_0x16777a="(.*?)"', html)
-        _0x14ff50 = self.search(r'_0x14ff50="(.*?)"', html)
-        _0x18dc18 = self.search(r'_0x18dc18="(.*?)"', html)
-
-        _0x541840 = _0x53e80d + _0x16777a + _0x92afb7 + _0x31f1b4
-        _0x51318f = _0x375c1e + _0x14ff50 + _0x4817e7
-        _0x574bee = _0x51318f + _0x541840 + _0x18dc18 + _0x2c6182
-
         try:
+            _0x92afb7 = self.search(r'_0x92afb7="(.*?)"', html)
+            _0x1cdcb3 = self.search(r'_0x1cdcb3="(.*?)"', html)
+            _0x31f1b4 = self.search(r'_0x31f1b4="(.*?)"', html)
+            _0x4817e7 = self.search(r'_0x4817e7="(.*?)"', html)
+            _0x2c6182 = self.search(r'_0x2c6182="(.*?)"', html)
+            _0x53e80d = self.search(r'_0x53e80d="(.*?)"', html)
+            _0x375c1e = self.search(r'_0x375c1e="(.*?)"', html)
+            _0x16777a = self.search(r'_0x16777a="(.*?)"', html)
+            _0x14ff50 = self.search(r'_0x14ff50="(.*?)"', html)
+            _0x18dc18 = self.search(r'_0x18dc18="(.*?)"', html)
+
+            _0x541840 = _0x53e80d + _0x16777a + _0x92afb7 + _0x31f1b4
+            _0x51318f = _0x375c1e + _0x14ff50 + _0x4817e7
+            _0x574bee = _0x51318f + _0x541840 + _0x18dc18 + _0x2c6182
+
             return base64.b64decode(_0x574bee)
         except binascii.Error as ex:
-            raise ex
+            print(ex)
+            traceback.print_exc()
+            return None
 
     def get_post_param(self, html):
         _0x161539 = self.search("_0x161539='(.*?)'", html)
