@@ -51,10 +51,10 @@ class MainWindow:
         # self.menu_bar.add_command(label="Toggle image", command=self.toggle_image)
         root.config(menu=self.menu_bar)
 
+        self.provider = ImgView()
         self.session = None
         self.show_image = False
         self.hist_window = None
-        self.provider = ImgRock()
         self.original_image = None
         self.original_image_name = None
         self.main_image = None
@@ -123,7 +123,15 @@ class MainWindow:
         frm_status.pack(fill=X)
 
     def load_image_from_input(self):
-        self.load_image(self.cb_url.get().strip())
+        self.load_image_retry(self.cb_url.get().strip())
+
+    def load_image_retry(self, input_url):
+        err_count = 0
+        while err_count < MAX_ERRORS:
+            if self.load_image(input_url):
+                break
+
+            err_count += 1
 
     def load_image(self, input_url):
         self.set_undefined_state()
@@ -139,6 +147,7 @@ class MainWindow:
 
         ident = self.get_id(input_url)
         if ident is None:
+            print("ident is None")
             return False
 
         input_url = "https://" + self.provider.get_host() + "/" + ident
@@ -146,52 +155,62 @@ class MainWindow:
         root.title(input_url)
 
         try:
-            err_count = 0
-            while err_count < MAX_ERRORS:
-                response = http_session.get(input_url, timeout=TIMEOUT)
-                if response.status_code == 404:
-                    return False
-                html = response.content.decode('utf-8')
+            response = http_session.get(input_url, timeout=TIMEOUT)
+            if response.status_code == 404:
+                print("input_url response.status_code == 404")
+                return False
 
-                if DEBUG:
-                    with open('1.html', 'w') as f:
-                        f.write(html)
+            html = response.text
 
-                # sometimes this functions fails (i don't want to tamper with this)
-                redirect_url = self.provider.get_redirect_url(html)
-                if redirect_url is not None:
-                    break
-                err_count += 1
+            if DEBUG:
+                with open('1.html', 'w') as f:
+                    f.write(html)
 
-            if err_count == MAX_ERRORS:
+            # sometimes this functions fails (i don't want to tamper with this)
+            redirect_url = self.provider.get_redirect_url(html)
+            if (redirect_url is None) or (len(redirect_url) == 0):
+                print("(redirect_url is None) or (len(redirect_url) == 0)")
                 return False
 
             http_session.headers.update({'Referer': input_url})
             response = http_session.get(redirect_url, timeout=TIMEOUT)
             if response.status_code == 404:
+                print("redirect_url response.status_code == 404")
                 return False
-            html = response.content.decode('utf-8')
+
+            html = response.text
 
             if DEBUG:
                 with open('2.html', 'w') as f:
                     f.write(html)
 
+            param = self.provider.get_post_param(html)
+            if len(param) == 0:
+                print("len(param) == 0")
+                return False
+
             post_fields = {
                 'op': 'view',
                 'id': ident,
                 'pre': 1,
-                self.provider.get_post_param(html): 1
+                param: 1
             }
             response = http_session.post(redirect_url, data=post_fields, timeout=TIMEOUT)
             if response.status_code == 404:
+                print("POST: redirect_url response.status_code == 404")
                 return False
-            html = response.content.decode('utf-8')
+
+            html = response.text
 
             if DEBUG:
                 with open('3.html', 'w') as f:
                     f.write(html)
 
-            thumb_url = self.provider.get_thumb(html)
+            thumb_url = get_thumb(html)
+            if len(thumb_url) == 0:
+                print("len(thumb_url) == 0")
+                return False
+
             slash_pos = thumb_url.rfind('/')
             self.thumb_prefix = thumb_url[: slash_pos + 1]
 
@@ -204,14 +223,15 @@ class MainWindow:
             image_url = self.provider.get_image_url(html)
             response = http_session.get(image_url, timeout=TIMEOUT)
             if response.status_code == 404:
+                print("image_url response.status_code == 404")
                 return False
 
             self.original_image = response.content
             self.original_image_name = get_filename(image_url)
 
-            # if DEBUG:
-            #     with open(self.original_image_name, 'wb') as f:
-            #         f.write(self.original_image)
+            if DEBUG:
+                with open(self.original_image_name, 'wb') as f:
+                    f.write(self.original_image)
 
             img = Image.open(io.BytesIO(self.original_image))
             w, h = img.size
@@ -256,6 +276,7 @@ class MainWindow:
         global root
 
         self.main_image = None
+        self.main_image_orig = None
         self.original_image = None
         self.original_image_name = None
         self.btn_image.config(image=None)
@@ -313,28 +334,28 @@ class MainWindow:
         return found.group(1)
 
     def reconfigure_left_buttons(self, html):
-        tab = self.provider.get_more_from_author(html)
-        self.provider.reconfigure_buttons(self, self.left_buttons, tab)
+        tab = get_more_from_author(html)
+        reconfigure_buttons(self, self.left_buttons, tab)
 
     def reconfigure_right_buttons(self, html):
-        tab = self.provider.get_more_from_gallery(html)
-        self.provider.reconfigure_buttons(self, self.right_buttons, tab)
+        tab = get_more_from_gallery(html)
+        reconfigure_buttons(self, self.right_buttons, tab)
 
     def reconfigure_prev_button(self, http_session, html):
-        url = self.provider.get_prev_url(html)
+        url = get_prev_url(html)
         ident = self.get_id(url)
         img_url = self.thumb_prefix + ident + '_t.jpg'
         self.reconfigure_button(http_session, self.btn_prev, url, img_url)
 
     def reconfigure_next_button(self, http_session, html):
-        url = self.provider.get_next_url(html)
+        url = get_next_url(html)
         ident = self.get_id(url)
         img_url = self.thumb_prefix + ident + '_t.jpg'
         self.reconfigure_button(http_session, self.btn_next, url, img_url)
 
     def reconfigure_button(self, http_session, btn, url, img_url):
         btn.link = url
-        btn.config(command=partial(self.load_image, url))
+        btn.config(command=partial(self.load_image_retry, url))
 
         photo_image = download_image(http_session, img_url)
         if photo_image is None:
@@ -428,6 +449,53 @@ def get_filename(url):
     return fname
 
 
+def reconfigure_buttons(win, buttons, html):
+    http_session = requests.Session()
+    http_session.headers.update(HEADERS)
+
+    try:
+        i = 0
+        for m in re.finditer('<td>.*?href="(.*?)".*?src="(.*?)".*?</td>', html, re.MULTILINE | re.DOTALL):
+            win.reconfigure_button(http_session, buttons[i], m.group(1), m.group(2))
+            i += 1
+    except BaseException as error:
+        print(error)
+        traceback.print_exc()
+        return False
+    finally:
+        http_session.close()
+
+
+def search(pattern, string):
+    found = re.search(pattern, string, re.MULTILINE | re.DOTALL)
+    if (found is None) or (found.group(0) is None):
+        return ""
+
+    return found.group(1)
+
+
+def get_next_url(html):
+    return search('< Previous.+?<a style=.+?href="(.*?)"><span.*?>Next', html)
+
+
+def get_prev_url(html):
+    return search('<a style=.+?href="(.*?)"><span.*?>< Previous', html)
+
+
+def get_more_from_author(html):
+    tab = search('<td align="left".*?<table>(.*?)</table>.*?</td>', html)
+    return tab
+
+
+def get_more_from_gallery(html):
+    tab = search('<td align="right".*?<table>(.*?)</table>.*?</td>', html)
+    return tab
+
+
+def get_thumb(html):
+    return search('\[IMG\](.*?)\[/IMG\]', html)
+
+
 class AbstractProvider(ABC):
     def __init__(self):
         super().__init__()
@@ -452,37 +520,6 @@ class AbstractProvider(ABC):
     def get_image_url(self, html):
         pass
 
-    @abstractmethod
-    def get_next_url(self, html):
-        pass
-
-    @abstractmethod
-    def get_prev_url(self, html):
-        pass
-
-    @abstractmethod
-    def get_more_from_author(self, html):
-        pass
-
-    @abstractmethod
-    def get_more_from_gallery(self, html):
-        pass
-
-    @abstractmethod
-    def reconfigure_buttons(self, win, buttons, html):
-        pass
-
-    def search(self, pattern, string):
-        found = re.search(pattern, string, re.MULTILINE | re.DOTALL)
-        if (found is None) or (found.group(0) is None):
-            return ""
-
-        return found.group(1)
-
-    @abstractmethod
-    def get_thumb(self, html):
-        pass
-
 
 class ImgRock(AbstractProvider):
     def __init__(self):
@@ -496,16 +533,16 @@ class ImgRock(AbstractProvider):
 
     def get_redirect_url(self, html):
         try:
-            _0x92afb7 = self.search(r'_0x92afb7="(.*?)"', html)
-            _0x1cdcb3 = self.search(r'_0x1cdcb3="(.*?)"', html)
-            _0x31f1b4 = self.search(r'_0x31f1b4="(.*?)"', html)
-            _0x4817e7 = self.search(r'_0x4817e7="(.*?)"', html)
-            _0x2c6182 = self.search(r'_0x2c6182="(.*?)"', html)
-            _0x53e80d = self.search(r'_0x53e80d="(.*?)"', html)
-            _0x375c1e = self.search(r'_0x375c1e="(.*?)"', html)
-            _0x16777a = self.search(r'_0x16777a="(.*?)"', html)
-            _0x14ff50 = self.search(r'_0x14ff50="(.*?)"', html)
-            _0x18dc18 = self.search(r'_0x18dc18="(.*?)"', html)
+            _0x92afb7 = search(r'_0x92afb7="(.*?)"', html)
+            _0x1cdcb3 = search(r'_0x1cdcb3="(.*?)"', html)
+            _0x31f1b4 = search(r'_0x31f1b4="(.*?)"', html)
+            _0x4817e7 = search(r'_0x4817e7="(.*?)"', html)
+            _0x2c6182 = search(r'_0x2c6182="(.*?)"', html)
+            _0x53e80d = search(r'_0x53e80d="(.*?)"', html)
+            _0x375c1e = search(r'_0x375c1e="(.*?)"', html)
+            _0x16777a = search(r'_0x16777a="(.*?)"', html)
+            _0x14ff50 = search(r'_0x14ff50="(.*?)"', html)
+            _0x18dc18 = search(r'_0x18dc18="(.*?)"', html)
 
             _0x541840 = _0x53e80d + _0x16777a + _0x92afb7 + _0x31f1b4
             _0x51318f = _0x375c1e + _0x14ff50 + _0x4817e7
@@ -518,48 +555,62 @@ class ImgRock(AbstractProvider):
             return None
 
     def get_post_param(self, html):
-        _0x161539 = self.search("_0x161539='(.*?)'", html)
-        _0xac7006 = self.search("_0xac7006='(.*?)'", html)
+        _0x161539 = search("_0x161539='(.*?)'", html)
+        _0xac7006 = search("_0xac7006='(.*?)'", html)
 
         return _0x161539 + _0xac7006
 
     def get_image_url(self, html):
-        _0xDB36 = self.search('_0xDB36="(.*?)"', html)
-        _0xDB54 = self.search('_0xDB54="(.*?)"', html)
+        _0xDB36 = search('_0xDB36="(.*?)"', html)
+        _0xDB54 = search('_0xDB54="(.*?)"', html)
         return _0xDB36 + '/img/' + _0xDB54
 
-    def get_next_url(self, html):
-        return self.search('< Previous.+?<a style=.+?href="(.*?)"><span.*?>Next', html)
 
-    def get_prev_url(self, html):
-        return self.search('<a style=.+?href="(.*?)"><span.*?>< Previous', html)
+class ImgView(AbstractProvider):
+    def __init__(self):
+        super().__init__()
 
-    def get_more_from_author(self, html):
-        tab = self.search('<td align="left".*?<table>(.*?)</table>.*?</td>', html)
-        return tab
+    def get_host(self):
+        return "imgview.pw"
 
-    def get_more_from_gallery(self, html):
-        tab = self.search('<td align="right".*?<table>(.*?)</table>.*?</td>', html)
-        return tab
+    def get_domen(self):
+        return "imgview"
 
-    def reconfigure_buttons(self, win, buttons, html):
-        http_session = requests.Session()
-        http_session.headers.update(HEADERS)
-
+    def get_redirect_url(self, html):
         try:
-            i = 0
-            for m in re.finditer('<td>.*?href="(.*?)".*?src="(.*?)".*?</td>', html, re.MULTILINE | re.DOTALL):
-                win.reconfigure_button(http_session, buttons[i], m.group(1), m.group(2))
-                i += 1
-        except BaseException as error:
-            print(error)
-            traceback.print_exc()
-            return False
-        finally:
-            http_session.close()
+            _0x474995 = search(r'_0x474995="(.*?)"', html)
+            _0x105bd2 = search(r'_0x105bd2="(.*?)"', html)
+            _0x5f000f = search(r'_0x5f000f="(.*?)"', html)
+            _0x5f4353 = search(r'_0x5f4353="(.*?)"', html)
+            _0x39b490 = search(r'_0x39b490="(.*?)"', html)
+            _0x51ca4d = search(r'_0x51ca4d="(.*?)"', html)
+            _0x3edc55 = search(r'_0x3edc55="(.*?)"', html)
+            _0x2091c4 = search(r'_0x2091c4="(.*?)"', html)
+            _0x388eb7 = search(r'_0x388eb7="(.*?)"', html)
+            _0x308cf0 = search(r'_0x308cf0="(.*?)"', html)
 
-    def get_thumb(self, html):
-        return self.search('\[IMG\](.*?)\[/IMG\]', html)
+            _0x33d616 = _0x51ca4d + _0x2091c4 + _0x474995 + _0x5f000f
+            _0x1dbdb1 = _0x3edc55 + _0x388eb7 + _0x5f4353
+            _0x180c90 = _0x1dbdb1 + _0x33d616 + _0x308cf0 + _0x39b490
+
+            return base64.b64decode(_0x180c90)
+        except binascii.Error as ex:
+            print(ex)
+            traceback.print_exc()
+            return None
+
+    def get_post_param(self, html):
+        _0x6f3649 = search("_0x6f3649='(.*?)'", html)
+        _0x5754e8 = search("_0x5754e8='(.*?)'", html)
+        _0x58bd37 = search("_0x58bd37='(.*?)'", html)
+        _0x23f325 = search("_0x23f325='(.*?)'", html)
+        _0x3e41de = search("_0x3e41de='(.*?)'", html)
+        _0x1728a8 = search("_0x1728a8='(.*?)'", html)
+
+        return _0x6f3649 + _0x5754e8 + _0x58bd37 + _0x23f325 + _0x3e41de + _0x1728a8
+
+    def get_image_url(self, html):
+        return search(r'>Next.+?<img src="(.*?)" class="picview" alt=', html)
 
 
 class HistoryWindow:
