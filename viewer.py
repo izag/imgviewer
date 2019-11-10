@@ -10,7 +10,7 @@ from concurrent.futures.thread import ThreadPoolExecutor
 from functools import partial
 from tkinter import Tk, Button, ttk, Image, Label, Menu, END, Listbox, Scrollbar, LEFT, Y, \
     SINGLE, BOTH, RIGHT, VERTICAL, Frame, Entry, \
-    StringVar, SUNKEN, W, X, NSEW, Grid, Canvas, HORIZONTAL, NW, BOTTOM
+    StringVar, SUNKEN, W, X, NSEW, Grid, Canvas, HORIZONTAL, NW, BOTTOM, BooleanVar, Checkbutton, DISABLED, NORMAL
 from urllib.parse import urlparse
 
 import clipboard
@@ -51,7 +51,7 @@ class MainWindow:
         # self.menu_bar.add_command(label="Toggle image", command=self.toggle_image)
         root.config(menu=self.menu_bar)
 
-        self.provider = ImgView()
+        self.provider = None
         self.session = None
         self.show_image = False
         self.hist_window = None
@@ -61,6 +61,7 @@ class MainWindow:
         self.main_image_orig = None
         self.resized = False
         self.thumb_prefix = None
+        self.proxies = None
 
         frm_top = Frame(root)
         self.frm_main = ScrollFrame(root)
@@ -95,6 +96,23 @@ class MainWindow:
         # self.cb_url.bind("<Button-1>", self.drop_down_callback)
         self.cb_url.bind('<Return>', self.enter_callback)
         self.cb_url.pack(side=LEFT)
+
+        self.use_proxy = BooleanVar()
+        self.use_proxy.set(False)
+        self.use_proxy.trace('w', self.on_use_proxy_change)
+
+        self.chk_use_proxy = Checkbutton(frm_top, text='Use proxy', variable=self.use_proxy)
+        self.chk_use_proxy.pack(side=LEFT)
+
+        self.cb_proxy = ttk.Combobox(frm_top, width=30, state=DISABLED)
+        self.cb_proxy.pack(side=LEFT)
+
+        try:
+            with open("proxy.txt") as f:
+                self.cb_proxy.set(f.readline().strip())
+        except BaseException as error:
+            print(error)
+            traceback.print_exc()
 
         self.btn_image = Button(frm_image, command=self.resize_image)
         self.btn_image.pack()
@@ -138,6 +156,19 @@ class MainWindow:
 
         self.cb_url.set(input_url)
 
+        self.provider = self.get_provider()
+
+        proxy = self.cb_proxy.get().strip()
+        if self.use_proxy.get() and len(proxy.strip()) > 0:
+            self.proxies = {
+                "http": "http://" + proxy,
+                "https": "https://" + proxy
+            }
+            with open("proxy.txt", "w") as f:
+                f.write(proxy)
+        else:
+            self.proxies = None
+
         http_session = requests.Session()
         http_session.headers.update(HEADERS)
 
@@ -155,7 +186,7 @@ class MainWindow:
         root.title(input_url)
 
         try:
-            response = http_session.get(input_url, timeout=TIMEOUT)
+            response = http_session.get(input_url, proxies=self.proxies, timeout=TIMEOUT)
             if response.status_code == 404:
                 print("input_url response.status_code == 404")
                 return False
@@ -173,7 +204,7 @@ class MainWindow:
                 return False
 
             http_session.headers.update({'Referer': input_url})
-            response = http_session.get(redirect_url, timeout=TIMEOUT)
+            response = http_session.get(redirect_url, proxies=self.proxies, timeout=TIMEOUT)
             if response.status_code == 404:
                 print("redirect_url response.status_code == 404")
                 return False
@@ -183,6 +214,11 @@ class MainWindow:
             if DEBUG:
                 with open('2.html', 'w') as f:
                     f.write(html)
+
+            pos = html.find('File Not Found')
+            if pos >= 0:
+                print("File Not Found: " + input_url)
+                return True
 
             param = self.provider.get_post_param(html)
             if len(param) == 0:
@@ -195,7 +231,7 @@ class MainWindow:
                 'pre': 1,
                 param: 1
             }
-            response = http_session.post(redirect_url, data=post_fields, timeout=TIMEOUT)
+            response = http_session.post(redirect_url, data=post_fields, proxies=self.proxies, timeout=TIMEOUT)
             if response.status_code == 404:
                 print("POST: redirect_url response.status_code == 404")
                 return False
@@ -221,13 +257,16 @@ class MainWindow:
             executor.submit(self.reconfigure_right_buttons, html)
 
             image_url = self.provider.get_image_url(html)
-            response = http_session.get(image_url, timeout=TIMEOUT)
+            response = http_session.get(image_url, proxies=self.proxies, timeout=TIMEOUT)
             if response.status_code == 404:
                 print("image_url response.status_code == 404")
                 return False
 
             self.original_image = response.content
-            self.original_image_name = get_filename(image_url)
+
+            fname = get_filename(image_url)
+            dot_pos = fname.rfind('.')
+            self.original_image_name = fname[: dot_pos] + '_' + ident + fname[dot_pos:]
 
             if DEBUG:
                 with open(self.original_image_name, 'wb') as f:
@@ -343,12 +382,18 @@ class MainWindow:
 
     def reconfigure_prev_button(self, http_session, html):
         url = get_prev_url(html)
+        if len(url) == 0:
+            return
+
         ident = self.get_id(url)
         img_url = self.thumb_prefix + ident + '_t.jpg'
         self.reconfigure_button(http_session, self.btn_prev, url, img_url)
 
     def reconfigure_next_button(self, http_session, html):
         url = get_next_url(html)
+        if len(url) == 0:
+            return
+
         ident = self.get_id(url)
         img_url = self.thumb_prefix + ident + '_t.jpg'
         self.reconfigure_button(http_session, self.btn_next, url, img_url)
@@ -363,6 +408,39 @@ class MainWindow:
 
         btn.config(image=photo_image)
         btn.image = photo_image
+
+    def on_use_proxy_change(self, *args):
+        if self.use_proxy.get():
+            self.cb_proxy.config(state=NORMAL)
+            self.cb_proxy.focus_set()
+            self.cb_proxy.selection_range(0, END)
+        else:
+            self.cb_proxy.config(state=DISABLED)
+
+    def get_provider(self):
+        input_url = self.cb_url.get()
+
+        pos = input_url.find(ImgRock.DOMEN)
+        if pos >= 0:
+            return ImgRock()
+
+        pos = input_url.find(ImgView.DOMEN)
+        if pos >= 0:
+            return ImgView()
+
+        pos = input_url.find(ImgTown.DOMEN)
+        if pos >= 0:
+            return ImgTown()
+
+        pos = input_url.find(ImgOutlet.DOMEN)
+        if pos >= 0:
+            return ImgOutlet()
+
+        pos = input_url.find(ImgMaze.DOMEN)
+        if pos >= 0:
+            return ImgMaze()
+
+        return None
 
 
 class ScrollFrame(Frame):
@@ -522,6 +600,8 @@ class AbstractProvider(ABC):
 
 
 class ImgRock(AbstractProvider):
+    DOMEN = "imgrock"
+
     def __init__(self):
         super().__init__()
 
@@ -529,7 +609,7 @@ class ImgRock(AbstractProvider):
         return "imgrock.pw"
 
     def get_domen(self):
-        return "imgrock"
+        return ImgRock.DOMEN
 
     def get_redirect_url(self, html):
         try:
@@ -567,6 +647,8 @@ class ImgRock(AbstractProvider):
 
 
 class ImgView(AbstractProvider):
+    DOMEN = "imgview"
+
     def __init__(self):
         super().__init__()
 
@@ -574,7 +656,7 @@ class ImgView(AbstractProvider):
         return "imgview.pw"
 
     def get_domen(self):
-        return "imgview"
+        return ImgView.DOMEN
 
     def get_redirect_url(self, html):
         try:
@@ -606,8 +688,168 @@ class ImgView(AbstractProvider):
         _0x23f325 = search("_0x23f325='(.*?)'", html)
         _0x3e41de = search("_0x3e41de='(.*?)'", html)
         _0x1728a8 = search("_0x1728a8='(.*?)'", html)
+        _0x46dc6a = search("_0x46dc6a='(.*?)'", html)
+        _0x2a20de = search("_0x2a20de='(.*?)'", html)
+        _0x1a0961 = search("_0x1a0961='(.*?)'", html)
+        _0x1008b5 = search("_0x1008b5='(.*?)'", html)
+        _0x301249 = search("_0x301249='(.*?)'", html)
 
-        return _0x6f3649 + _0x5754e8 + _0x58bd37 + _0x23f325 + _0x3e41de + _0x1728a8
+        return _0x6f3649 + _0x5754e8 + _0x58bd37 + _0x23f325 + _0x3e41de + _0x1728a8 + _0x46dc6a + _0x2a20de + _0x1a0961 + _0x1008b5 + _0x301249
+
+    def get_image_url(self, html):
+        return search(r'>Next.+?<img src="(.*?)" class="picview" alt=', html)
+
+
+class ImgTown(AbstractProvider):
+    DOMEN = "imgtown"
+
+    def __init__(self):
+        super().__init__()
+
+    def get_host(self):
+        return "imgtown.pw"
+
+    def get_domen(self):
+        return ImgTown.DOMEN
+
+    def get_redirect_url(self, html):
+        try:
+            _0x92afb7 = search(r'_0x92afb7="(.*?)"', html)
+            _0x1cdcb3 = search(r'_0x1cdcb3="(.*?)"', html)
+            _0x31f1b4 = search(r'_0x31f1b4="(.*?)"', html)
+            _0x4817e7 = search(r'_0x4817e7="(.*?)"', html)
+            _0x2c6182 = search(r'_0x2c6182="(.*?)"', html)
+            _0x53e80d = search(r'_0x53e80d="(.*?)"', html)
+            _0x375c1e = search(r'_0x375c1e="(.*?)"', html)
+            _0x16777a = search(r'_0x16777a="(.*?)"', html)
+            _0x14ff50 = search(r'_0x14ff50="(.*?)"', html)
+            _0x18dc18 = search(r'_0x18dc18="(.*?)"', html)
+
+            _0x541840 = _0x53e80d + _0x16777a + _0x92afb7 + _0x31f1b4
+            _0x51318f = _0x375c1e + _0x14ff50 + _0x4817e7
+            _0x574bee = _0x51318f + _0x541840 + _0x18dc18 + _0x2c6182
+
+            return base64.b64decode(_0x574bee)
+        except binascii.Error as ex:
+            print(ex)
+            traceback.print_exc()
+            return None
+
+    def get_post_param(self, html):
+        _0x6f3649 = search("_0x6f3649='(.*?)'", html)
+        _0x5754e8 = search("_0x5754e8='(.*?)'", html)
+        _0x58bd37 = search("_0x58bd37='(.*?)'", html)
+        _0x23f325 = search("_0x23f325='(.*?)'", html)
+        _0x3e41de = search("_0x3e41de='(.*?)'", html)
+        _0x1728a8 = search("_0x1728a8='(.*?)'", html)
+        _0x46dc6a = search("_0x46dc6a='(.*?)'", html)
+        _0x2a20de = search("_0x2a20de='(.*?)'", html)
+        _0x1a0961 = search("_0x1a0961='(.*?)'", html)
+        _0x1008b5 = search("_0x1008b5='(.*?)'", html)
+        _0x301249 = search("_0x301249='(.*?)'", html)
+
+        return _0x6f3649 + _0x5754e8 + _0x58bd37 + _0x23f325 + _0x3e41de + _0x1728a8 + _0x46dc6a + _0x2a20de + _0x1a0961 + _0x1008b5 + _0x301249
+
+    def get_image_url(self, html):
+        return search(r'>Next.+?<img src="(.*?)" class="picview" alt=', html)
+
+
+class ImgOutlet(AbstractProvider):
+    DOMEN = "imgoutlet"
+
+    def __init__(self):
+        super().__init__()
+
+    def get_host(self):
+        return "imgoutlet.pw"
+
+    def get_domen(self):
+        return ImgOutlet.DOMEN
+
+    def get_redirect_url(self, html):
+        try:
+            _0x4ae180 = search(r'_0x4ae180="(.*?)"', html)
+            _0x31c497 = search(r'_0x31c497="(.*?)"', html)
+            _0x580e37 = search(r'_0x580e37="(.*?)"', html)
+            _0x337490 = search(r'_0x337490="(.*?)"', html)
+            _0x5aa778 = search(r'_0x5aa778="(.*?)"', html)
+            _0x4c78db = search(r'_0x4c78db="(.*?)"', html)
+            _0x5f2b0 = search(r'_0x5f2b0="(.*?)"', html)
+            _0x19792c = search(r'_0x19792c="(.*?)"', html)
+            _0x269158 = search(r'_0x269158="(.*?)"', html)
+            _0xacf574 = search(r'_0xacf574="(.*?)"', html)
+
+            _0x3ec3bd = _0x4c78db + _0x19792c + _0x4ae180 + _0x580e37
+            _0x5051f4 = _0x5f2b0 + _0x269158 + _0x337490
+            _0x1587cc = _0x5051f4 + _0x3ec3bd + _0xacf574 + _0x5aa778
+
+            return base64.b64decode(_0x1587cc)
+        except binascii.Error as ex:
+            print(ex)
+            traceback.print_exc()
+            return None
+
+    def get_post_param(self, html):
+        _0x161539 = search("_0x161539='(.*?)'", html)
+        _0xac7006 = search("_0xac7006='(.*?)'", html)
+
+        return _0x161539 + _0xac7006
+
+    def get_image_url(self, html):
+        _0xDB36 = search('_0xDB36="(.*?)"', html)
+        _0xDB54 = search('_0xDB54="(.*?)"', html)
+        return _0xDB36 + '/img/' + _0xDB54
+
+
+class ImgMaze(AbstractProvider):
+    DOMEN = "imgmaze"
+
+    def __init__(self):
+        super().__init__()
+
+    def get_host(self):
+        return "imgmaze.pw"
+
+    def get_domen(self):
+        return ImgMaze.DOMEN
+
+    def get_redirect_url(self, html):
+        try:
+            _0x1ab2d2 = search(r'_0x1ab2d2="(.*?)"', html)
+            _0x2b3b4c = search(r'_0x2b3b4c="(.*?)"', html)
+            _0x3b4d44 = search(r'_0x3b4d44="(.*?)"', html)
+            _0x43582a = search(r'_0x43582a="(.*?)"', html)
+            _0x501afd = search(r'_0x501afd="(.*?)"', html)
+            _0x23d671 = search(r'_0x23d671="(.*?)"', html)
+            _0x220856 = search(r'_0x220856="(.*?)"', html)
+            _0x473131 = search(r'_0x473131="(.*?)"', html)
+            _0x421cf1 = search(r'_0x421cf1="(.*?)"', html)
+            _0x86fd3f = search(r'_0x86fd3f="(.*?)"', html)
+
+            _0x15e3ee = _0x23d671 + _0x473131 + _0x1ab2d2 + _0x3b4d44
+            _0x5d3c98 = _0x220856 + _0x421cf1 + _0x43582a;
+            _0x358455 = _0x5d3c98 + _0x15e3ee + _0x86fd3f + _0x501afd
+
+            return base64.b64decode(_0x358455)
+        except binascii.Error as ex:
+            print(ex)
+            traceback.print_exc()
+            return None
+
+    def get_post_param(self, html):
+        _0x6f3649 = search("_0x6f3649='(.*?)'", html)
+        _0x5754e8 = search("_0x5754e8='(.*?)'", html)
+        _0x58bd37 = search("_0x58bd37='(.*?)'", html)
+        _0x23f325 = search("_0x23f325='(.*?)'", html)
+        _0x3e41de = search("_0x3e41de='(.*?)'", html)
+        _0x1728a8 = search("_0x1728a8='(.*?)'", html)
+        _0x46dc6a = search("_0x46dc6a='(.*?)'", html)
+        _0x2a20de = search("_0x2a20de='(.*?)'", html)
+        _0x1a0961 = search("_0x1a0961='(.*?)'", html)
+        _0x1008b5 = search("_0x1008b5='(.*?)'", html)
+        _0x301249 = search("_0x301249='(.*?)'", html)
+
+        return _0x6f3649 + _0x5754e8 + _0x58bd37 + _0x23f325 + _0x3e41de + _0x1728a8 + _0x46dc6a + _0x2a20de + _0x1a0961 + _0x1008b5 + _0x301249
 
     def get_image_url(self, html):
         return search(r'>Next.+?<img src="(.*?)" class="picview" alt=', html)
@@ -701,6 +943,6 @@ if __name__ == "__main__":
     if not os.path.exists(OUTPUT):
         os.mkdir(OUTPUT)
 
-    root.geometry("800x600")
+    root.geometry("1200x600")
     main_win = MainWindow()
     root.mainloop()
