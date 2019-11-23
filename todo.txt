@@ -1,7 +1,5 @@
 TODO:
-	- history ('Back' button)
 	- gallery view
-	- button link copy
 
 
 Tests:
