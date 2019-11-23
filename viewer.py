@@ -112,6 +112,9 @@ class MainWindow:
         self.cb_proxy = ttk.Combobox(frm_top, width=30, state=DISABLED)
         self.cb_proxy.pack(side=LEFT)
 
+        self.btn_force = Button(frm_top, text="Force load", command=self.force_load_image)
+        self.btn_force.pack(side=LEFT)
+
         try:
             with open("proxy.txt") as f:
                 self.cb_proxy.set(f.readline().strip())
@@ -145,18 +148,21 @@ class MainWindow:
         self.frm_main.pack(fill=BOTH, expand=1)
         frm_status.pack(fill=X)
 
-    def load_image_from_input(self):
-        self.load_image_retry(self.cb_url.get().strip())
+    def force_load_image(self):
+        self.load_image_retry(self.cb_url.get().strip(), True)
 
-    def load_image_retry(self, input_url):
+    def load_image_from_input(self):
+        self.load_image_retry(self.cb_url.get().strip(), False)
+
+    def load_image_retry(self, input_url, ignore_cache):
         err_count = 0
         while err_count < MAX_ERRORS:
-            if self.load_image(input_url, True):
+            if self.load_image(input_url, True, ignore_cache):
                 break
 
             err_count += 1
 
-    def load_image(self, input_url, remember):
+    def load_image(self, input_url, remember, ignore_cache):
         self.set_undefined_state()
 
         self.cb_url.set(input_url)
@@ -195,7 +201,7 @@ class MainWindow:
 
         try:
             html = self.get_from_cache(ident)
-            if (html is None) or (len(html) == 0):
+            if ignore_cache or (html is None) or (len(html) == 0):
                 html = self.get_final_page(ident, input_url, http_session)
 
             if (html is None) or (len(html) == 0):
@@ -445,7 +451,7 @@ class MainWindow:
 
     def reconfigure_button(self, http_session, btn, url, img_url):
         btn.link = url
-        btn.config(command=partial(self.load_image_retry, url))
+        btn.config(command=partial(self.load_image_retry, url, False))
 
         filename = get_filename(img_url)
         image = self.get_from_cache(filename)
@@ -510,13 +516,13 @@ class MainWindow:
 
         self.fwd_stack.append(self.hist_stack.pop())
 
-        self.load_image(self.hist_stack[-1], False)
+        self.load_image(self.hist_stack[-1], False, False)
 
     def forward_in_history(self):
         if len(self.fwd_stack) == 0:
             return
 
-        self.load_image(self.fwd_stack[-1], True)
+        self.load_image(self.fwd_stack[-1], True, False)
 
     def get_from_cache(self, filename):
         full_path = os.path.join(CACHE, self.provider.get_domen(), filename)
