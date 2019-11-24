@@ -41,9 +41,6 @@ executor = ThreadPoolExecutor(max_workers=20)
 root = Tk()
 
 
-# https://imgrock.net/plazf3yq1eb2/956624.jpg.html
-
-
 class MainWindow:
 
     def __init__(self):
