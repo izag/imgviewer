@@ -2,15 +2,17 @@ import base64
 import binascii
 import datetime
 import io
+import math
 import os
 import re
 import traceback
 from abc import ABC, abstractmethod
 from concurrent.futures.thread import ThreadPoolExecutor
 from functools import partial
-from tkinter import Tk, Button, ttk, Image, Label, Menu, END, Listbox, Scrollbar, LEFT, Y, \
-    SINGLE, BOTH, RIGHT, VERTICAL, Frame, Entry, \
-    StringVar, SUNKEN, W, X, NSEW, Grid, Canvas, HORIZONTAL, NW, BOTTOM, BooleanVar, Checkbutton, DISABLED, NORMAL
+from tkinter import Tk, Button, Image, Label, Menu, END, Scrollbar, LEFT, Y, \
+    BOTH, RIGHT, VERTICAL, Frame, StringVar, SUNKEN, W, X, NSEW, Grid, Canvas, HORIZONTAL, NW, BOTTOM, BooleanVar, \
+    Checkbutton, DISABLED, NORMAL, Toplevel, EW
+from tkinter.ttk import Entry
 from urllib.parse import urlparse
 
 import clipboard
@@ -50,13 +52,12 @@ class MainWindow:
         self.menu_bar = Menu(root)
         self.menu_bar.add_command(label="Back", command=self.back_in_history)
         self.menu_bar.add_command(label="Forward", command=self.forward_in_history)
-        self.menu_bar.add_command(label="Copy gallery", command=self.copy_gallery_url)
+        self.menu_bar.add_command(label="View gallery", command=self.view_gallery_url)
         root.config(menu=self.menu_bar)
 
         self.provider = None
         self.session = None
         self.show_image = False
-        self.hist_window = None
         self.original_image = None
         self.original_image_name = None
         self.main_image = None
@@ -96,11 +97,11 @@ class MainWindow:
         self.btn_update = Button(frm_top, text="Load image", command=self.load_image_from_input)
         self.btn_update.pack(side=LEFT)
 
-        self.cb_url = ttk.Combobox(frm_top, width=100)
-        self.cb_url.bind("<FocusIn>", self.focus_callback)
-        # self.cb_url.bind("<Button-1>", self.drop_down_callback)
-        self.cb_url.bind('<Return>', self.enter_callback)
-        self.cb_url.pack(side=LEFT)
+        self.sv_url = StringVar()
+        self.entry_url = Entry(frm_top, textvariable=self.sv_url, width=100)
+        self.entry_url.bind("<FocusIn>", self.focus_callback)
+        self.entry_url.bind('<Return>', self.enter_callback)
+        self.entry_url.pack(side=LEFT)
 
         self.use_proxy = BooleanVar()
         self.use_proxy.set(False)
@@ -109,15 +110,16 @@ class MainWindow:
         self.chk_use_proxy = Checkbutton(frm_top, text='Use proxy', variable=self.use_proxy)
         self.chk_use_proxy.pack(side=LEFT)
 
-        self.cb_proxy = ttk.Combobox(frm_top, width=30, state=DISABLED)
-        self.cb_proxy.pack(side=LEFT)
+        self.sv_proxy = StringVar()
+        self.entry_proxy = Entry(frm_top, textvariable=self.sv_proxy, width=30, state=DISABLED)
+        self.entry_proxy.pack(side=LEFT)
 
         self.btn_force = Button(frm_top, text="Force load", command=self.force_load_image)
         self.btn_force.pack(side=LEFT)
 
         try:
             with open("proxy.txt") as f:
-                self.cb_proxy.set(f.readline().strip())
+                self.sv_proxy.set(f.readline().strip())
         except BaseException as error:
             print(error)
             traceback.print_exc()
@@ -135,6 +137,8 @@ class MainWindow:
         self.status.set('Status Bar')
 
         root.bind("<FocusIn>", self.focus_callback)
+        root.bind("<BackSpace>", self.backspace_callback)
+        root.bind("<space>", self.space_callback)
         root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         frm_caption.pack()
@@ -149,10 +153,10 @@ class MainWindow:
         frm_status.pack(fill=X)
 
     def force_load_image(self):
-        self.load_image_retry(self.cb_url.get().strip(), True)
+        self.load_image_retry(self.sv_url.get().strip(), True)
 
     def load_image_from_input(self):
-        self.load_image_retry(self.cb_url.get().strip(), False)
+        self.load_image_retry(self.sv_url.get().strip(), False)
 
     def load_image_retry(self, input_url, ignore_cache):
         err_count = 0
@@ -165,14 +169,14 @@ class MainWindow:
     def load_image(self, input_url, remember, ignore_cache):
         self.set_undefined_state()
 
-        self.cb_url.set(input_url)
+        self.sv_url.set(input_url)
 
         self.provider = self.get_provider()
         cache_path = os.path.join(CACHE, self.provider.get_domen())
         if not os.path.exists(cache_path):
             os.mkdir(cache_path)
 
-        proxy = self.cb_proxy.get().strip()
+        proxy = self.sv_proxy.get().strip()
         if self.use_proxy.get() and len(proxy.strip()) > 0:
             self.proxies = {
                 "http": "http://" + proxy,
@@ -314,7 +318,7 @@ class MainWindow:
 
         fname = get_filename(image_url)
         dot_pos = fname.rfind('.')
-        self.original_image_name = fname[: dot_pos] + '_' + ident + fname[dot_pos:]
+        self.original_image_name = fname[: dot_pos] + '_' + ident
         self.original_image = self.get_from_cache(self.original_image_name)
 
         if (self.original_image is None) or (len(self.original_image) == 0):
@@ -346,15 +350,16 @@ class MainWindow:
         return True
 
     def focus_callback(self, event):
-        self.cb_url.selection_range(0, END)
-
-    def drop_down_callback(self, event):
-        self.cb_url.focus_set()
-        self.cb_url.selection_range(0, END)
-        self.cb_url.event_generate('<Down>')
+        self.entry_url.selection_range(0, END)
 
     def enter_callback(self, event):
         self.load_image_from_input()
+
+    def backspace_callback(self, event):
+        self.back_in_history()
+
+    def space_callback(self, event):
+        self.forward_in_history()
 
     def on_close(self):
         global root
@@ -373,10 +378,11 @@ class MainWindow:
         root.title(None)
         self.btn_prev.config(image=None, command=None)
         self.btn_next.config(image=None, command=None)
+        self.frm_main.scroll_top_left()
 
     def paste_from_clipboard(self):
-        self.cb_url.set(clipboard.paste())
-        self.cb_url.selection_range(0, END)
+        self.sv_url.set(clipboard.paste())
+        self.entry_url.selection_range(0, END)
 
     def save_image(self):
         if self.original_image is None:
@@ -385,8 +391,7 @@ class MainWindow:
         filename = self.original_image_name
         i = 1
         while os.path.exists(os.path.join(OUTPUT, filename)):
-            filename, file_extension = os.path.splitext(self.original_image_name)
-            filename = f'{filename}_{i:04}{file_extension}'
+            filename = f'{self.original_image_name}_{i:04}'
             i += 1
 
         with open(os.path.join(OUTPUT, filename), 'wb') as f:
@@ -405,7 +410,7 @@ class MainWindow:
             for j in range(2):
                 Grid.rowconfigure(panel, j, weight=1)
                 btn = LinkButton(self, panel, text=f"({i}, {j})")
-                btn.link = f"({i}, {j})"
+                btn.link = None
                 btn.grid(row=i, column=j, sticky=NSEW, padx=PAD, pady=PAD)
                 buttons.append(btn)
 
@@ -425,11 +430,11 @@ class MainWindow:
 
     def reconfigure_left_buttons(self, html):
         tab = get_more_from_author(html)
-        reconfigure_buttons(self, self.left_buttons, tab)
+        self.reconfigure_buttons(self.left_buttons, tab)
 
     def reconfigure_right_buttons(self, html):
         tab = get_more_from_gallery(html)
-        reconfigure_buttons(self, self.right_buttons, tab)
+        self.reconfigure_buttons(self.right_buttons, tab)
 
     def reconfigure_prev_button(self, http_session, html):
         url = get_prev_url(html)
@@ -454,6 +459,8 @@ class MainWindow:
         btn.config(command=partial(self.load_image_retry, url, False))
 
         filename = get_filename(img_url)
+        dot_pos = filename.rfind('.')
+        filename = filename[: dot_pos]
         image = self.get_from_cache(filename)
         if (image is None) or (len(image) == 0):
             image = download_image(http_session, img_url)
@@ -470,16 +477,31 @@ class MainWindow:
         btn.config(image=photo_image)
         btn.image = photo_image
 
+    def reconfigure_buttons(self, buttons, html):
+        http_session = requests.Session()
+        http_session.headers.update(HEADERS)
+
+        try:
+            i = 0
+            for m in re.finditer('<td>.*?href="(.*?)".*?src="(.*?)".*?</td>', html, re.MULTILINE | re.DOTALL):
+                self.reconfigure_button(http_session, buttons[i], m.group(1), m.group(2))
+                i += 1
+        except BaseException as error:
+            print(error)
+            traceback.print_exc()
+        finally:
+            http_session.close()
+
     def on_use_proxy_change(self, *args):
         if self.use_proxy.get():
-            self.cb_proxy.config(state=NORMAL)
-            self.cb_proxy.focus_set()
-            self.cb_proxy.selection_range(0, END)
+            self.entry_proxy.config(state=NORMAL)
+            self.entry_proxy.focus_set()
+            self.entry_proxy.selection_range(0, END)
         else:
-            self.cb_proxy.config(state=DISABLED)
+            self.entry_proxy.config(state=DISABLED)
 
     def get_provider(self):
-        input_url = self.cb_url.get()
+        input_url = self.sv_url.get()
 
         pos = input_url.find(ImgRock.DOMEN)
         if pos >= 0:
@@ -507,8 +529,12 @@ class MainWindow:
 
         return None
 
-    def copy_gallery_url(self):
+    def view_gallery_url(self):
+        if (self.gallery_url is None) or (len(self.gallery_url) == 0):
+            return
+
         clipboard.copy(self.gallery_url)
+        GalleryWindow(self, Toplevel(root))
 
     def back_in_history(self):
         if len(self.hist_stack) < 2:
@@ -530,13 +556,13 @@ class MainWindow:
             return None
 
         with open(full_path, 'rb') as f:
-            return f.read()
+            return f.read()[:: -1]
 
     def put_to_cache(self, filename, data):
         full_path = os.path.join(CACHE, self.provider.get_domen(), filename)
 
         with open(full_path, 'wb') as f:
-            f.write(data)
+            f.write(data[:: -1])
 
 
 class ScrollFrame(Frame):
@@ -564,8 +590,8 @@ class ScrollFrame(Frame):
 
         # bind an event whenever the size of the viewPort frame changes.
         self.view_port.bind("<Configure>", self.on_frame_configure)
-        self.canvas.bind_all("<MouseWheel>", self.on_mousewheel_y)
-        self.canvas.bind_all("<Control-MouseWheel>", self.on_mousewheel_x)
+        self.canvas.bind('<Enter>', self.bound_to_mousewheel)
+        self.canvas.bind('<Leave>', self.unbound_to_mousewheel)
 
         # perform an initial stretch on render, otherwise the scroll region has a tiny border until the first resize
         self.on_frame_configure(None)
@@ -580,6 +606,14 @@ class ScrollFrame(Frame):
 
     def on_mousewheel_y(self, event):
         self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def bound_to_mousewheel(self, event):
+        self.canvas.bind_all("<MouseWheel>", self.on_mousewheel_y)
+        self.canvas.bind_all("<Control-MouseWheel>", self.on_mousewheel_x)
+
+    def unbound_to_mousewheel(self, event):
+        self.canvas.unbind_all("<MouseWheel>")
+        self.canvas.unbind_all("<Control-MouseWheel>")
 
     def scroll_top_left(self):
         self.canvas.xview_moveto(0)
@@ -621,23 +655,6 @@ def get_filename(url):
         return fname[:-5]
 
     return fname
-
-
-def reconfigure_buttons(win, buttons, html):
-    http_session = requests.Session()
-    http_session.headers.update(HEADERS)
-
-    try:
-        i = 0
-        for m in re.finditer('<td>.*?href="(.*?)".*?src="(.*?)".*?</td>', html, re.MULTILINE | re.DOTALL):
-            win.reconfigure_button(http_session, buttons[i], m.group(1), m.group(2))
-            i += 1
-    except BaseException as error:
-        print(error)
-        traceback.print_exc()
-        return False
-    finally:
-        http_session.close()
 
 
 def search(pattern, string):
@@ -923,7 +940,7 @@ class ImgMaze(AbstractProvider):
             _0x86fd3f = search(r'_0x86fd3f="(.*?)"', html)
 
             _0x15e3ee = _0x23d671 + _0x473131 + _0x1ab2d2 + _0x3b4d44
-            _0x5d3c98 = _0x220856 + _0x421cf1 + _0x43582a;
+            _0x5d3c98 = _0x220856 + _0x421cf1 + _0x43582a
             _0x358455 = _0x5d3c98 + _0x15e3ee + _0x86fd3f + _0x501afd
 
             return base64.b64decode(_0x358455)
@@ -1005,88 +1022,194 @@ class ImgDew(AbstractProvider):
         return search(r'>Next.+?<img src="(.*?)" class="picview" alt=', html)
 
 
-class HistoryWindow:
+class GalleryWindow:
 
     def __init__(self, parent, win):
         self.window = win
         self.parent_window = parent
-        self.window.title("Full history")
+        self.window.title("Gallery view")
+        self.window.geometry('180x740')
         self.window.resizable(False, False)
 
         frm_top = Frame(win)
-        frm_bottom = Frame(win)
+        self.frm_bottom = ScrollFrame(win)
 
-        self.search = StringVar()
-        self.search.trace("w", lambda name, index, mode, sv=self.search: self.on_search(sv))
-        self.entry_search = Entry(frm_top, textvariable=self.search, width=57)
-        self.entry_search.pack(side=LEFT, fill=BOTH, expand=1)
+        g_spot = parent.gallery_url.find('/g/')
+        self.gallery = parent.gallery_url[g_spot + 3:]
+        self.page = 1
+        self.page_count = 1000000
+        self.provider = parent.provider
 
-        self.btn_clear = Button(frm_top, text="Clear", command=self.on_clear)
-        self.btn_clear.pack(side=RIGHT, fill=BOTH, expand=1)
+        self.sv_page = StringVar()
+        self.entry_page = Entry(frm_top, textvariable=self.sv_page, width=20)
+        self.entry_page.grid(row=0, column=0, columnspan=7, sticky=EW)
+        self.entry_page.bind('<Return>', self.enter_callback)
 
-        self.list_box = Listbox(frm_bottom, width=60, height=40, selectmode=SINGLE)
-        self.list_box.pack(side=LEFT, fill=BOTH, expand=1)
-        scroll = Scrollbar(frm_bottom, command=self.list_box.yview, orient=VERTICAL)
-        scroll.pack(side=RIGHT, fill=Y)
-        self.list_box.config(yscrollcommand=scroll.set)
-        self.list_box.bind('<<ListboxSelect>>', self.on_listbox_select)
+        self.btn_clear = Button(frm_top, text=">>",
+                                command=lambda: self.show_page(self.sv_page.get().strip()))
+        self.btn_clear.grid(row=0, column=7, sticky=EW)
+
+        self.btn_first = Button(frm_top, text="Fst", command=partial(self.show_page, 1))
+        self.btn_first.grid(row=1, column=0, sticky=EW)
+
+        self.add_prev_buttons(1, frm_top)
+        self.add_next_buttons(1, frm_top)
+
+        self.btn_last = Button(frm_top, text="Lst",
+                               command=lambda: self.show_page(self.page_count))
+        self.btn_last.grid(row=1, column=7, sticky=EW)
+
+        self.image_buttons = self.fill_panel(self.frm_bottom.view_port)
 
         frm_top.pack()
-        frm_bottom.pack()
+        self.frm_bottom.pack(fill=BOTH, expand=1)
 
-        self.window.bind("<FocusIn>", self.focus_callback)
         self.window.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        self.fill_list_box()
+        self.show_page(1)
 
-    def on_clear(self):
-        self.search.set("")
-        self.on_search(self.search)
+    def show_page(self, page):
+        self.frm_bottom.scroll_top_left()
 
-    def on_search(self, search):
-        query = search.get().strip().lower()
-        if len(query) < 2:
-            self.fill_list_box()
-            return
+        self.page = int(page)
 
-        self.list_box.delete(0, END)
-        search_results = []
-        for key in self.parent_window.hist_dict:
-            pos = key.lower().find(query)
-            if pos == -1:
-                continue
+        if self.page < 1:
+            self.page = 1
 
-            search_results.append((key, pos))
+        if self.page > self.page_count:
+            self.page = self.page_count
 
-        search_results.sort(key=lambda x: x[1])
-        self.list_box.insert(END, *[x[0] for x in search_results])
+        self.sv_page.set(self.page)
 
-    def fill_list_box(self):
-        self.list_box.delete(0, END)
-        hist = sorted(self.parent_window.hist_dict.items(), key=lambda x: x[1], reverse=True)
-        self.list_box.insert(END, *[x[0] for x in hist])
+        try:
+            filename = f'{self.gallery}_{self.page:05}'
+            html = self.get_from_cache(filename)
+            if (html is None) or (len(html) == 0):
+                url = f'https://{self.provider.get_host()}/?fld_hash={self.gallery}&' \
+                      f'op=gallery&per_page=15&page={self.page}'
+                response = requests.get(url, proxies=self.parent_window.proxies, timeout=TIMEOUT)
+                if response.status_code == 404:
+                    print("gallery url response.status_code == 404")
+                    return False
 
-    def on_listbox_select(self, event):
-        w = event.widget
-        selected = w.curselection()
-        if len(selected) == 0:
-            return
+                html = response.content
+                self.put_to_cache(filename, html)
 
-        index = selected[0]
-        value = w.get(index)
-        self.parent_window.cb_model.set(value)
+            html = html.decode('utf-8')
 
-    def lift(self):
-        self.window.lift()
+            total = search('<small>\(([0-9]+) total\)</small>', html)
+            if (total is not None) and (len(total) > 0):
+                self.page_count = math.ceil(int(total) / 15)
+
+            tab = search('<Table class="file_block">(.*?)</Table>', html)
+            self.reconfigure_buttons(self.image_buttons, tab)
+
+            self.window.title(f'{self.gallery} ({self.page_count})')
+
+        except BaseException as error:
+            print(error)
+            traceback.print_exc()
+            return False
+
+        return True
+
+    def fill_panel(self, panel):
+        buttons = []
+        for i in range(15):
+            btn = LinkButton(self.parent_window, panel, text=f"({i})")
+            btn.link = None
+            btn.grid(row=i, column=0, sticky=NSEW, padx=PAD, pady=PAD)
+            buttons.append(btn)
+
+        return buttons
+
+    def add_next_buttons(self, row_num, panel):
+        btn = Button(panel, text=f"+1",
+                     command=lambda: self.show_page(self.page + 1))
+        btn.grid(row=row_num, column=4, sticky=NSEW)
+
+        btn = Button(panel, text=f"+2",
+                     command=lambda: self.show_page(self.page + 2))
+        btn.grid(row=row_num, column=5, sticky=NSEW)
+
+        btn = Button(panel, text=f"+3",
+                     command=lambda: self.show_page(self.page + 3))
+        btn.grid(row=row_num, column=6, sticky=NSEW)
+
+    def add_prev_buttons(self, row_num, panel):
+        btn = Button(panel, text=f"-3",
+                     command=lambda: self.show_page(self.page - 3))
+        btn.grid(row=row_num, column=1, sticky=NSEW)
+
+        btn = Button(panel, text=f"-2",
+                     command=lambda: self.show_page(self.page - 2))
+        btn.grid(row=row_num, column=2, sticky=NSEW)
+
+        btn = Button(panel, text=f"-1",
+                     command=lambda: self.show_page(self.page - 1))
+        btn.grid(row=row_num, column=3, sticky=NSEW)
 
     def on_close(self):
-        self.parent_window.hist_window = None
         self.window.update_idletasks()
         self.window.destroy()
 
-    def focus_callback(self, event):
-        self.entry_search.selection_range(0, END)
-        root.lift()
+    def reconfigure_button(self, http_session, btn, url, img_url):
+        btn.link = url
+        btn.config(command=partial(self.load_image, url))
+
+        filename = get_filename(img_url)
+        dot_pos = filename.rfind('.')
+        filename = filename[: dot_pos]
+        image = self.get_from_cache(filename)
+        if (image is None) or (len(image) == 0):
+            image = download_image(http_session, img_url)
+            self.put_to_cache(filename, image)
+
+        img = Image.open(io.BytesIO(image))
+        w, h = img.size
+        k = IMG_WIDTH / w
+        img_resized = img.resize((IMG_WIDTH, int(h * k)))
+        photo_image = ImageTk.PhotoImage(img_resized)
+        if photo_image is None:
+            return
+
+        btn.config(image=photo_image)
+        btn.image = photo_image
+
+    def load_image(self, url):
+        executor.submit(self.parent_window.load_image_retry, url, False)
+
+    def reconfigure_buttons(self, buttons, html):
+        http_session = requests.Session()
+        http_session.headers.update(HEADERS)
+
+        try:
+            i = 0
+            for m in re.finditer('<TD>.*?href="(.*?)".*?src="(.*?)".*?</TD>', html, re.MULTILINE | re.DOTALL):
+                self.reconfigure_button(http_session, buttons[i], m.group(1), m.group(2))
+                i += 1
+        except BaseException as error:
+            print(error)
+            traceback.print_exc()
+        finally:
+            http_session.close()
+
+    def get_from_cache(self, filename):
+        full_path = os.path.join(CACHE, self.provider.get_domen(), filename)
+        if not os.path.exists(full_path):
+            return None
+
+        with open(full_path, 'rb') as f:
+            return f.read()[:: -1]
+
+    def put_to_cache(self, filename, data):
+        full_path = os.path.join(CACHE, self.provider.get_domen(), filename)
+
+        with open(full_path, 'wb') as f:
+            f.write(data[:: -1])
+
+    def enter_callback(self, event):
+        self.show_page(self.sv_page.get().strip())
 
 
 if __name__ == "__main__":
