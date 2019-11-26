@@ -5,6 +5,7 @@ import io
 import math
 import os
 import re
+import time
 import traceback
 from abc import ABC, abstractmethod
 from concurrent.futures.thread import ThreadPoolExecutor
@@ -326,9 +327,9 @@ class MainWindow:
 
             self.original_image = response.content
 
-            if DEBUG:
-                with open(self.original_image_name, 'wb') as f:
-                    f.write(self.original_image)
+            # if DEBUG:
+            #     with open(self.original_image_name, 'wb') as f:
+            #         f.write(self.original_image)
 
             self.put_to_cache(self.original_image_name, self.original_image)
 
@@ -463,6 +464,9 @@ class MainWindow:
             image = download_image(http_session, img_url)
             self.put_to_cache(filename, image)
 
+        if (image is None) or (len(image) == 0):
+            return
+
         img = Image.open(io.BytesIO(image))
         w, h = img.size
         k = IMG_WIDTH / w
@@ -479,6 +483,10 @@ class MainWindow:
         http_session.headers.update(HEADERS)
 
         try:
+            for btn in buttons:
+                btn.config(image=None, command=None)
+                btn.link = None
+
             i = 0
             for m in re.finditer('<td>.*?href="(.*?)".*?src="(.*?)".*?</td>', html, re.MULTILINE | re.DOTALL):
                 self.reconfigure_button(http_session, buttons[i], m.group(1), m.group(2))
@@ -552,10 +560,16 @@ class MainWindow:
         if not os.path.exists(full_path):
             return None
 
+        mod_time = time.time()
+        os.utime(full_path, (mod_time, mod_time))
+
         with open(full_path, 'rb') as f:
             return f.read()[:: -1]
 
     def put_to_cache(self, filename, data):
+        if (data is None) or (len(data) == 0):
+            return
+
         full_path = os.path.join(CACHE, self.provider.get_domen(), filename)
 
         with open(full_path, 'wb') as f:
@@ -637,9 +651,9 @@ def download_image(http_session, url):
 
     image = response.content
 
-    if DEBUG:
-        with open(get_filename(url), 'wb') as f:
-            f.write(image)
+    # if DEBUG:
+    #     with open(get_filename(url), 'wb') as f:
+    #         f.write(image)
 
     return image
 
@@ -1025,7 +1039,7 @@ class GalleryWindow:
         self.window = win
         self.parent_window = parent
         self.window.title("Gallery view")
-        self.window.geometry('180x740')
+        self.window.geometry('180x740+1180+0')
         self.window.resizable(False, False)
 
         frm_top = Frame(win)
@@ -1076,8 +1090,6 @@ class GalleryWindow:
         if self.page > self.page_count:
             self.page = self.page_count
 
-        self.sv_page.set(self.page)
-
         try:
             filename = f'{self.gallery}_{self.page:05}'
             html = self.get_from_cache(filename)
@@ -1096,7 +1108,9 @@ class GalleryWindow:
 
             total = search('<small>\(([0-9]+) total\)</small>', html)
             if (total is not None) and (len(total) > 0):
-                self.page_count = math.ceil(int(total) / 15)
+                self.page_count = int(math.ceil(int(total) / 15))
+            else:
+                self.page_count = 1
 
             tab = search('<Table class="file_block">(.*?)</Table>', html)
             self.reconfigure_buttons(self.image_buttons, tab)
@@ -1107,6 +1121,8 @@ class GalleryWindow:
             print(error)
             traceback.print_exc()
             return False
+
+        self.sv_page.set(self.page)
 
         return True
 
@@ -1162,6 +1178,9 @@ class GalleryWindow:
             image = download_image(http_session, img_url)
             self.put_to_cache(filename, image)
 
+        if (image is None) or (len(image) == 0):
+            return
+
         img = Image.open(io.BytesIO(image))
         w, h = img.size
         k = IMG_WIDTH / w
@@ -1181,6 +1200,10 @@ class GalleryWindow:
         http_session.headers.update(HEADERS)
 
         try:
+            for btn in buttons:
+                btn.config(image=None, command=None)
+                btn.link = None
+
             i = 0
             for m in re.finditer('<TD>.*?href="(.*?)".*?src="(.*?)".*?</TD>', html, re.MULTILINE | re.DOTALL):
                 self.reconfigure_button(http_session, buttons[i], m.group(1), m.group(2))
@@ -1196,10 +1219,16 @@ class GalleryWindow:
         if not os.path.exists(full_path):
             return None
 
+        mod_time = time.time()
+        os.utime(full_path, (mod_time, mod_time))
+
         with open(full_path, 'rb') as f:
             return f.read()[:: -1]
 
     def put_to_cache(self, filename, data):
+        if (data is None) or (len(data) == 0):
+            return
+
         full_path = os.path.join(CACHE, self.provider.get_domen(), filename)
 
         with open(full_path, 'wb') as f:
@@ -1216,6 +1245,6 @@ if __name__ == "__main__":
     if not os.path.exists(CACHE):
         os.mkdir(CACHE)
 
-    root.geometry("1200x600")
+    root.geometry("1024x720+0+0")
     main_win = MainWindow()
     root.mainloop()
