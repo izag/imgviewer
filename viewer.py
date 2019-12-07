@@ -319,6 +319,7 @@ class MainWindow:
         self.original_image_name = fname[: dot_pos] + '_' + ident
         self.original_image = self.get_from_cache(self.original_image_name)
 
+        bg_color = 'green'
         if (self.original_image is None) or (len(self.original_image) == 0):
             response = http_session.get(image_url, proxies=self.proxies, timeout=TIMEOUT)
             if response.status_code == 404:
@@ -332,6 +333,7 @@ class MainWindow:
             #         f.write(self.original_image)
 
             self.put_to_cache(self.original_image_name, self.original_image)
+            bg_color = 'red'
 
         img = Image.open(io.BytesIO(self.original_image))
         w, h = img.size
@@ -343,7 +345,10 @@ class MainWindow:
         self.resized = True
         self.main_image_orig = ImageTk.PhotoImage(img)
         self.main_image = ImageTk.PhotoImage(img_resized)
-        self.btn_image.config(image=self.main_image)
+        self.btn_image.config(image=self.main_image, background=bg_color)
+
+        if os.path.exists(os.path.join(OUTPUT, self.original_image_name)):
+            self.btn_save.config(background="green")
 
         return True
 
@@ -372,10 +377,11 @@ class MainWindow:
         self.main_image_orig = None
         self.original_image = None
         self.original_image_name = None
-        self.btn_image.config(image=None)
+        self.btn_image.config(image='', background="SystemButtonFace")
+        self.btn_save.config(background="SystemButtonFace")
         root.title(None)
-        self.btn_prev.config(image=None, command=None)
-        self.btn_next.config(image=None, command=None)
+        self.btn_prev.config(image='', command=None, background="SystemButtonFace")
+        self.btn_next.config(image='', command=None, background="SystemButtonFace")
         self.frm_main.scroll_top_left()
 
     def paste_from_clipboard(self):
@@ -394,6 +400,8 @@ class MainWindow:
 
         with open(os.path.join(OUTPUT, filename), 'wb') as f:
             f.write(self.original_image)
+
+        self.btn_save.config(background="green")
 
     def on_enter(self, event):
         self.status.set(event.widget.link)
@@ -459,10 +467,12 @@ class MainWindow:
         filename = get_filename(img_url)
         dot_pos = filename.rfind('.')
         filename = filename[: dot_pos]
+        bg_color = "green"
         image = self.get_from_cache(filename)
         if (image is None) or (len(image) == 0):
             image = download_image(http_session, img_url)
             self.put_to_cache(filename, image)
+            bg_color = "red"
 
         if (image is None) or (len(image) == 0):
             return
@@ -475,7 +485,7 @@ class MainWindow:
         if photo_image is None:
             return
 
-        btn.config(image=photo_image)
+        btn.config(image=photo_image, background=bg_color)
         btn.image = photo_image
 
     def reconfigure_buttons(self, buttons, html):
@@ -484,7 +494,7 @@ class MainWindow:
 
         try:
             for btn in buttons:
-                btn.config(image=None, command=None)
+                btn.config(image='', command=None, background="SystemButtonFace")
                 btn.link = None
 
             i = 0
@@ -621,10 +631,18 @@ class ScrollFrame(Frame):
     def bound_to_mousewheel(self, event):
         self.canvas.bind_all("<MouseWheel>", self.on_mousewheel_y)
         self.canvas.bind_all("<Control-MouseWheel>", self.on_mousewheel_x)
+        self.canvas.bind_all("<Up>", lambda event: self.canvas.yview_scroll(-1, "units"))
+        self.canvas.bind_all("<Down>", lambda event: self.canvas.yview_scroll(1, "units"))
+        self.canvas.bind_all("<Left>", lambda event: self.canvas.xview_scroll(-1, "units"))
+        self.canvas.bind_all("<Right>", lambda event: self.canvas.xview_scroll(1, "units"))
 
     def unbound_to_mousewheel(self, event):
         self.canvas.unbind_all("<MouseWheel>")
         self.canvas.unbind_all("<Control-MouseWheel>")
+        self.canvas.unbind_all("<Up>")
+        self.canvas.unbind_all("<Down>")
+        self.canvas.unbind_all("<Left>")
+        self.canvas.unbind_all("<Right>")
 
     def scroll_top_left(self):
         self.canvas.xview_moveto(0)
@@ -1039,7 +1057,7 @@ class GalleryWindow:
         self.window = win
         self.parent_window = parent
         self.window.title("Gallery view")
-        self.window.geometry('180x740+1180+0')
+        self.window.geometry('300x740+1060+0')
         self.window.resizable(False, False)
 
         frm_top = Frame(win)
@@ -1051,35 +1069,39 @@ class GalleryWindow:
         self.page_count = 1000000
         self.provider = parent.provider
 
+        self.btn_reload = Button(frm_top, text="Reload",
+                                 command=lambda: self.show_page(self.sv_page.get().strip(), True))
+        self.btn_reload.grid(row=0, column=0, columnspan=8, sticky=EW)
+
         self.sv_page = StringVar()
-        self.entry_page = Entry(frm_top, textvariable=self.sv_page, width=20)
-        self.entry_page.grid(row=0, column=0, columnspan=7, sticky=EW)
+        self.entry_page = Entry(frm_top, textvariable=self.sv_page, width=40)
+        self.entry_page.grid(row=1, column=0, columnspan=7, sticky=EW)
         self.entry_page.bind('<Return>', self.enter_callback)
 
-        self.btn_clear = Button(frm_top, text=">>",
-                                command=lambda: self.show_page(self.sv_page.get().strip()))
-        self.btn_clear.grid(row=0, column=7, sticky=EW)
+        self.btn_show = Button(frm_top, text=">>",
+                               command=lambda: self.show_page(self.sv_page.get().strip()))
+        self.btn_show.grid(row=1, column=7, sticky=EW)
 
-        self.btn_first = Button(frm_top, text="Fst", command=partial(self.show_page, 1))
-        self.btn_first.grid(row=1, column=0, sticky=EW)
+        self.btn_first = Button(frm_top, text="First", command=partial(self.show_page, 1))
+        self.btn_first.grid(row=2, column=0, sticky=EW)
 
-        self.add_prev_buttons(1, frm_top)
-        self.add_next_buttons(1, frm_top)
+        self.add_prev_buttons(2, frm_top)
+        self.add_next_buttons(2, frm_top)
 
-        self.btn_last = Button(frm_top, text="Lst",
+        self.btn_last = Button(frm_top, text="Last",
                                command=lambda: self.show_page(self.page_count))
-        self.btn_last.grid(row=1, column=7, sticky=EW)
+        self.btn_last.grid(row=2, column=7, sticky=EW)
 
         self.image_buttons = self.fill_panel(self.frm_bottom.view_port)
 
-        frm_top.pack()
+        frm_top.pack(fill=X)
         self.frm_bottom.pack(fill=BOTH, expand=1)
 
         self.window.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.show_page(1)
 
-    def show_page(self, page):
+    def show_page(self, page, ignore_cache=False):
         self.frm_bottom.scroll_top_left()
 
         self.page = int(page)
@@ -1093,7 +1115,7 @@ class GalleryWindow:
         try:
             filename = f'{self.gallery}_{self.page:05}'
             html = self.get_from_cache(filename)
-            if (html is None) or (len(html) == 0):
+            if ignore_cache or (html is None) or (len(html) == 0):
                 url = f'https://{self.provider.get_host()}/?fld_hash={self.gallery}&' \
                       f'op=gallery&per_page=15&page={self.page}'
                 response = requests.get(url, proxies=self.parent_window.proxies, timeout=TIMEOUT)
@@ -1128,11 +1150,12 @@ class GalleryWindow:
 
     def fill_panel(self, panel):
         buttons = []
-        for i in range(15):
-            btn = LinkButton(self.parent_window, panel, text=f"({i})")
-            btn.link = None
-            btn.grid(row=i, column=0, sticky=NSEW, padx=PAD, pady=PAD)
-            buttons.append(btn)
+        for i in range(8):
+            for j in range(2):
+                btn = LinkButton(self.parent_window, panel, text=f"({i}, {j})")
+                btn.link = None
+                btn.grid(row=i, column=j, sticky=NSEW, padx=PAD, pady=PAD)
+                buttons.append(btn)
 
         return buttons
 
@@ -1173,10 +1196,12 @@ class GalleryWindow:
         filename = get_filename(img_url)
         dot_pos = filename.rfind('.')
         filename = filename[: dot_pos]
+        bg_color = "green"
         image = self.get_from_cache(filename)
         if (image is None) or (len(image) == 0):
             image = download_image(http_session, img_url)
             self.put_to_cache(filename, image)
+            bg_color = "red"
 
         if (image is None) or (len(image) == 0):
             return
@@ -1189,7 +1214,7 @@ class GalleryWindow:
         if photo_image is None:
             return
 
-        btn.config(image=photo_image)
+        btn.config(image=photo_image, background=bg_color)
         btn.image = photo_image
 
     def load_image(self, url):
@@ -1201,7 +1226,7 @@ class GalleryWindow:
 
         try:
             for btn in buttons:
-                btn.config(image=None, command=None)
+                btn.config(image='', command=None, background='SystemButtonFace')
                 btn.link = None
 
             i = 0
@@ -1245,6 +1270,6 @@ if __name__ == "__main__":
     if not os.path.exists(CACHE):
         os.mkdir(CACHE)
 
-    root.geometry("1024x720+0+0")
+    root.geometry("1044x720+0+0")
     main_win = MainWindow()
     root.mainloop()
