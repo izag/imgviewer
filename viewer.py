@@ -12,7 +12,7 @@ from concurrent.futures.thread import ThreadPoolExecutor
 from functools import partial
 from tkinter import Tk, Button, Image, Label, Menu, END, Scrollbar, LEFT, Y, \
     BOTH, RIGHT, VERTICAL, Frame, StringVar, SUNKEN, W, X, NSEW, Grid, Canvas, HORIZONTAL, NW, BOTTOM, BooleanVar, \
-    Checkbutton, DISABLED, NORMAL, Toplevel, EW
+    Checkbutton, DISABLED, NORMAL, Toplevel, EW, ttk
 from tkinter.ttk import Entry
 from urllib.parse import urlparse
 
@@ -48,8 +48,8 @@ class MainWindow:
         global root
 
         self.menu_bar = Menu(root)
-        self.menu_bar.add_command(label="Back", command=self.back_in_history)
-        self.menu_bar.add_command(label="Forward", command=self.forward_in_history)
+        self.menu_bar.add_command(label="<< Back", command=self.back_in_history)
+        self.menu_bar.add_command(label="Forward >>", command=self.forward_in_history)
         self.menu_bar.add_command(label="View gallery", command=self.view_gallery_url)
         root.config(menu=self.menu_bar)
 
@@ -134,6 +134,9 @@ class MainWindow:
         self.status_label.pack(side=LEFT, fill=BOTH, expand=1)
         self.status.set('Status Bar')
 
+        self.progress_bar = ttk.Progressbar(frm_status, orient=HORIZONTAL,
+                                            length=200, mode='indeterminate')
+
         root.bind("<FocusIn>", self.focus_callback)
         root.bind("<BackSpace>", self.backspace_callback)
         root.bind("<space>", self.space_callback)
@@ -151,25 +154,45 @@ class MainWindow:
         frm_status.pack(fill=X)
 
     def force_load_image(self):
-        self.load_image_retry(self.sv_url.get().strip(), True)
+        self.load_page_in_thread(self.sv_url.get().strip(), True, True)
 
     def load_image_from_input(self):
-        self.load_image_retry(self.sv_url.get().strip(), False)
+        self.load_page_in_thread(self.sv_url.get().strip())
 
-    def load_image_retry(self, input_url, ignore_cache):
-        err_count = 0
-        while err_count < MAX_ERRORS:
-            if self.load_image(input_url, True, ignore_cache):
-                break
+    def load_page_in_thread(self, input_url, remember=True, ignore_cache=False):
+        self.set_controls_state(DISABLED)
+        executor.submit(self.load_image_retry, input_url, remember, ignore_cache)
 
-            err_count += 1
+    def load_image_retry(self, input_url, remember, ignore_cache):
+        global root
+
+        try:
+            err_count = 0
+            while err_count < MAX_ERRORS:
+                root.after_idle(self.set_undefined_state)
+                if self.load_image(input_url, remember, ignore_cache):
+                    break
+
+                err_count += 1
+        except BaseException as error:
+            print("Exception URL: " + input_url)
+            print(error)
+            traceback.print_exc()
+        finally:
+            root.after_idle(self.set_controls_state, NORMAL)
 
     def load_image(self, input_url, remember, ignore_cache):
-        self.set_undefined_state()
+        global root
 
-        self.sv_url.set(input_url)
+        if len(input_url) == 0:
+            return False
+
+        root.after_idle(self.sv_url.set, input_url)
 
         self.provider = self.get_provider()
+        if self.provider is None:
+            return False
+
         cache_path = os.path.join(CACHE, self.provider.get_domen())
         if not os.path.exists(cache_path):
             os.mkdir(cache_path)
@@ -188,10 +211,6 @@ class MainWindow:
         http_session = requests.Session()
         http_session.headers.update(HEADERS)
 
-        if len(input_url) == 0:
-            self.set_undefined_state()
-            return False
-
         ident = self.get_id(input_url)
         if ident is None:
             print("ident is None")
@@ -199,7 +218,7 @@ class MainWindow:
 
         input_url = "https://" + self.provider.get_host() + "/" + ident
 
-        root.title(input_url)
+        root.after_idle(root.title, input_url)
 
         try:
             html = self.get_from_cache(ident)
@@ -223,7 +242,6 @@ class MainWindow:
                     self.fwd_stack.clear()
 
         except BaseException as error:
-            root.after_idle(self.set_undefined_state)
             print("Exception URL: " + input_url)
             print(error)
             traceback.print_exc()
@@ -234,6 +252,8 @@ class MainWindow:
         return True
 
     def get_final_page(self, ident, input_url, http_session):
+        global root
+
         response = http_session.get(input_url, proxies=self.proxies, timeout=TIMEOUT)
         if response.status_code == 404:
             print("input_url response.status_code == 404")
@@ -340,15 +360,16 @@ class MainWindow:
         k = MAIN_IMG_WIDTH / w
         img_resized = img.resize((MAIN_IMG_WIDTH, int(h * k)))
 
-        root.title(f"{root.title()} ({w}x{h})")
+        root.after_idle(root.title, f"{root.title()} ({w}x{h})")
 
         self.resized = True
         self.main_image_orig = ImageTk.PhotoImage(img)
         self.main_image = ImageTk.PhotoImage(img_resized)
-        self.btn_image.config(image=self.main_image, background=bg_color)
+        root.after_idle(self.btn_image.config,
+                        {'image': self.main_image, 'background': bg_color })
 
         if os.path.exists(os.path.join(OUTPUT, self.original_image_name)):
-            self.btn_save.config(background="green")
+            root.after_idle(self.btn_save.config, {'background': 'green'})
 
         return True
 
@@ -380,8 +401,13 @@ class MainWindow:
         self.btn_image.config(image='', background="SystemButtonFace")
         self.btn_save.config(background="SystemButtonFace")
         root.title(None)
-        self.btn_prev.config(image='', command=None, background="SystemButtonFace")
-        self.btn_next.config(image='', command=None, background="SystemButtonFace")
+        self.btn_prev.reset()
+        self.btn_next.reset()
+        for btn in self.left_buttons:
+            btn.reset()
+        for btn in self.right_buttons:
+            btn.reset()
+
         self.frm_main.scroll_top_left()
 
     def paste_from_clipboard(self):
@@ -461,8 +487,7 @@ class MainWindow:
         self.reconfigure_button(http_session, self.btn_next, url, img_url)
 
     def reconfigure_button(self, http_session, btn, url, img_url):
-        btn.link = url
-        btn.config(command=partial(self.load_image_retry, url, False))
+        global root
 
         filename = get_filename(img_url)
         dot_pos = filename.rfind('.')
@@ -485,8 +510,8 @@ class MainWindow:
         if photo_image is None:
             return
 
-        btn.config(image=photo_image, background=bg_color)
-        btn.image = photo_image
+        root.after_idle(btn.set_values, url, partial(self.load_page_in_thread, url),
+                        photo_image, bg_color)
 
     def reconfigure_buttons(self, buttons, html):
         http_session = requests.Session()
@@ -494,8 +519,7 @@ class MainWindow:
 
         try:
             for btn in buttons:
-                btn.config(image='', command=None, background="SystemButtonFace")
-                btn.link = None
+                btn.reset()
 
             i = 0
             for m in re.finditer('<td>.*?href="(.*?)".*?src="(.*?)".*?</td>', html, re.MULTILINE | re.DOTALL):
@@ -557,13 +581,13 @@ class MainWindow:
 
         self.fwd_stack.append(self.hist_stack.pop())
 
-        self.load_image(self.hist_stack[-1], False, False)
+        self.load_page_in_thread(self.hist_stack[-1], False)
 
     def forward_in_history(self):
         if len(self.fwd_stack) == 0:
             return
 
-        self.load_image(self.fwd_stack[-1], True, False)
+        self.load_page_in_thread(self.fwd_stack[-1])
 
     def get_from_cache(self, filename):
         full_path = os.path.join(CACHE, self.provider.get_domen(), filename)
@@ -584,6 +608,30 @@ class MainWindow:
 
         with open(full_path, 'wb') as f:
             f.write(data[:: -1])
+
+    def set_controls_state(self, status):
+        self.btn_prev.config(state=status)
+        self.btn_next.config(state=status)
+        self.btn_update.config(state=status)
+        self.btn_force.config(state=status)
+        self.entry_url.config(state=status)
+        self.btn_paste.config(state=status)
+        self.chk_use_proxy.config(state=status)
+        self.entry_proxy.config(state=status)
+        self.menu_bar.entryconfig("<< Back", state=status)
+        self.menu_bar.entryconfig("Forward >>", state=status)
+
+        for btn in self.left_buttons:
+            btn.config(state=status)
+        for btn in self.right_buttons:
+            btn.config(state=status)
+
+        if status == DISABLED:
+            self.progress_bar.pack(side=LEFT)
+            self.progress_bar.start()
+        else:
+            self.progress_bar.pack_forget()
+            self.progress_bar.stop()
 
 
 class ScrollFrame(Frame):
@@ -660,6 +708,15 @@ class LinkButton(Button):
 
     def copy_link(self, event):
         clipboard.copy(self.link)
+
+    def reset(self):
+        self.config(image='', command=None, background="SystemButtonFace")
+        self.link = None
+
+    def set_values(self, url, cmd, img, bg_color):
+        self.config(image=img, command=cmd, background=bg_color)
+        self.image = img
+        self.link = url
 
 
 def download_image(http_session, url):
@@ -1070,7 +1127,7 @@ class GalleryWindow:
         self.provider = parent.provider
 
         self.btn_reload = Button(frm_top, text="Reload",
-                                 command=lambda: self.show_page(self.sv_page.get().strip(), True))
+                                 command=lambda: self.show_page_in_thread(self.sv_page.get().strip(), True))
         self.btn_reload.grid(row=0, column=0, columnspan=8, sticky=EW)
 
         self.sv_page = StringVar()
@@ -1079,17 +1136,18 @@ class GalleryWindow:
         self.entry_page.bind('<Return>', self.enter_callback)
 
         self.btn_show = Button(frm_top, text=">>",
-                               command=lambda: self.show_page(self.sv_page.get().strip()))
+                               command=lambda: self.show_page_in_thread(self.sv_page.get().strip()))
         self.btn_show.grid(row=1, column=7, sticky=EW)
 
-        self.btn_first = Button(frm_top, text="First", command=partial(self.show_page, 1))
+        self.btn_first = Button(frm_top, text="First", command=partial(self.show_page_in_thread, 1))
         self.btn_first.grid(row=2, column=0, sticky=EW)
 
+        self.top_buttons = []
         self.add_prev_buttons(2, frm_top)
         self.add_next_buttons(2, frm_top)
 
         self.btn_last = Button(frm_top, text="Last",
-                               command=lambda: self.show_page(self.page_count))
+                               command=lambda: self.show_page_in_thread(self.page_count))
         self.btn_last.grid(row=2, column=7, sticky=EW)
 
         self.image_buttons = self.fill_panel(self.frm_bottom.view_port)
@@ -1099,10 +1157,16 @@ class GalleryWindow:
 
         self.window.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        self.show_page(1)
+        self.show_page_in_thread(1)
 
-    def show_page(self, page, ignore_cache=False):
-        self.frm_bottom.scroll_top_left()
+    def show_page_in_thread(self, page, ignore_cache=False):
+        self.set_controls_state(DISABLED)
+        executor.submit(self.show_page, page, ignore_cache)
+
+    def show_page(self, page, ignore_cache):
+        global root
+
+        root.after_idle(self.frm_bottom.scroll_top_left)
 
         self.page = int(page)
 
@@ -1143,8 +1207,10 @@ class GalleryWindow:
             print(error)
             traceback.print_exc()
             return False
+        finally:
+            root.after_idle(self.set_controls_state, NORMAL)
 
-        self.sv_page.set(self.page)
+        root.after_idle(self.sv_page.set, self.page)
 
         return True
 
@@ -1161,37 +1227,42 @@ class GalleryWindow:
 
     def add_next_buttons(self, row_num, panel):
         btn = Button(panel, text=f"+1",
-                     command=lambda: self.show_page(self.page + 1))
+                     command=lambda: self.show_page_in_thread(self.page + 1))
         btn.grid(row=row_num, column=4, sticky=NSEW)
+        self.top_buttons.append(btn)
 
         btn = Button(panel, text=f"+2",
-                     command=lambda: self.show_page(self.page + 2))
+                     command=lambda: self.show_page_in_thread(self.page + 2))
         btn.grid(row=row_num, column=5, sticky=NSEW)
+        self.top_buttons.append(btn)
 
         btn = Button(panel, text=f"+3",
-                     command=lambda: self.show_page(self.page + 3))
+                     command=lambda: self.show_page_in_thread(self.page + 3))
         btn.grid(row=row_num, column=6, sticky=NSEW)
+        self.top_buttons.append(btn)
 
     def add_prev_buttons(self, row_num, panel):
         btn = Button(panel, text=f"-3",
-                     command=lambda: self.show_page(self.page - 3))
+                     command=lambda: self.show_page_in_thread(self.page - 3))
         btn.grid(row=row_num, column=1, sticky=NSEW)
+        self.top_buttons.append(btn)
 
         btn = Button(panel, text=f"-2",
-                     command=lambda: self.show_page(self.page - 2))
+                     command=lambda: self.show_page_in_thread(self.page - 2))
         btn.grid(row=row_num, column=2, sticky=NSEW)
+        self.top_buttons.append(btn)
 
         btn = Button(panel, text=f"-1",
-                     command=lambda: self.show_page(self.page - 1))
+                     command=lambda: self.show_page_in_thread(self.page - 1))
         btn.grid(row=row_num, column=3, sticky=NSEW)
+        self.top_buttons.append(btn)
 
     def on_close(self):
         self.window.update_idletasks()
         self.window.destroy()
 
     def reconfigure_button(self, http_session, btn, url, img_url):
-        btn.link = url
-        btn.config(command=partial(self.load_image, url))
+        global root
 
         filename = get_filename(img_url)
         dot_pos = filename.rfind('.')
@@ -1214,11 +1285,11 @@ class GalleryWindow:
         if photo_image is None:
             return
 
-        btn.config(image=photo_image, background=bg_color)
-        btn.image = photo_image
+        root.after_idle(btn.set_values, url, partial(self.load_image, url),
+                        photo_image, bg_color)
 
     def load_image(self, url):
-        executor.submit(self.parent_window.load_image_retry, url, False)
+        executor.submit(self.parent_window.load_page_in_thread, url)
 
     def reconfigure_buttons(self, buttons, html):
         http_session = requests.Session()
@@ -1226,8 +1297,7 @@ class GalleryWindow:
 
         try:
             for btn in buttons:
-                btn.config(image='', command=None, background='SystemButtonFace')
-                btn.link = None
+                btn.reset()
 
             i = 0
             for m in re.finditer('<TD>.*?href="(.*?)".*?src="(.*?)".*?</TD>', html, re.MULTILINE | re.DOTALL):
@@ -1260,7 +1330,19 @@ class GalleryWindow:
             f.write(data[:: -1])
 
     def enter_callback(self, event):
-        self.show_page(self.sv_page.get().strip())
+        self.show_page_in_thread(self.sv_page.get().strip())
+
+    def set_controls_state(self, status):
+        self.btn_reload.config(state=status)
+        self.entry_page.config(state=status)
+        self.btn_show.config(state=status)
+        self.btn_first.config(state=status)
+        self.btn_last.config(state=status)
+
+        for btn in self.image_buttons:
+            btn.config(state=status)
+        for btn in self.top_buttons:
+            btn.config(state=status)
 
 
 if __name__ == "__main__":
