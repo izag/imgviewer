@@ -47,12 +47,6 @@ class MainWindow:
     def __init__(self):
         global root
 
-        self.menu_bar = Menu(root)
-        self.menu_bar.add_command(label="<< Back", command=self.back_in_history)
-        self.menu_bar.add_command(label="Forward >>", command=self.forward_in_history)
-        self.menu_bar.add_command(label="View gallery", command=self.view_gallery_url)
-        root.config(menu=self.menu_bar)
-
         self.provider = None
         self.session = None
         self.show_image = False
@@ -66,6 +60,14 @@ class MainWindow:
         self.gallery_url = None
         self.hist_stack = []
         self.fwd_stack = []
+        self.interrupt = False
+
+        self.menu_bar = Menu(root)
+        self.menu_bar.add_command(label="<< Back", command=self.back_in_history)
+        self.menu_bar.add_command(label="Forward >>", command=self.forward_in_history)
+        self.menu_bar.add_command(label="View gallery", command=self.view_gallery_url)
+        self.menu_bar.add_command(label="Cancel", command=self.calcel)
+        root.config(menu=self.menu_bar)
 
         frm_top = Frame(root)
         self.frm_main = ScrollFrame(root)
@@ -161,7 +163,9 @@ class MainWindow:
 
     def load_page_in_thread(self, input_url, remember=True, ignore_cache=False):
         self.set_controls_state(DISABLED)
-        executor.submit(self.load_image_retry, input_url, remember, ignore_cache)
+        self.interrupt = False
+        future = executor.submit(self.load_image_retry, input_url, remember, ignore_cache)
+        future.add_done_callback(lambda f: self.set_controls_state(NORMAL))
 
     def load_image_retry(self, input_url, remember, ignore_cache):
         global root
@@ -173,13 +177,14 @@ class MainWindow:
                 if self.load_image(input_url, remember, ignore_cache):
                     break
 
+                if self.interrupt:
+                    break
+
                 err_count += 1
         except BaseException as error:
             print("Exception URL: " + input_url)
             print(error)
             traceback.print_exc()
-        finally:
-            root.after_idle(self.set_controls_state, NORMAL)
 
     def load_image(self, input_url, remember, ignore_cache):
         global root
@@ -390,6 +395,9 @@ class MainWindow:
 
         root.update_idletasks()
         root.destroy()
+
+    def calcel(self):
+        self.interrupt = True
 
     def set_undefined_state(self):
         global root
@@ -1109,6 +1117,7 @@ class ImgDew(AbstractProvider):
 
 
 class GalleryWindow:
+    INFINITY = 1000000
 
     def __init__(self, parent, win):
         self.window = win
@@ -1123,7 +1132,7 @@ class GalleryWindow:
         g_spot = parent.gallery_url.find('/g/')
         self.gallery = parent.gallery_url[g_spot + 3:]
         self.page = 1
-        self.page_count = 1000000
+        self.page_count = GalleryWindow.INFINITY
         self.provider = parent.provider
 
         self.btn_reload = Button(frm_top, text="Reload",
@@ -1161,7 +1170,8 @@ class GalleryWindow:
 
     def show_page_in_thread(self, page, ignore_cache=False):
         self.set_controls_state(DISABLED)
-        executor.submit(self.show_page, page, ignore_cache)
+        future = executor.submit(self.show_page, page, ignore_cache)
+        future.add_done_callback(lambda f: self.set_controls_state(NORMAL))
 
     def show_page(self, page, ignore_cache):
         global root
@@ -1192,11 +1202,12 @@ class GalleryWindow:
 
             html = html.decode('utf-8')
 
-            total = search('<small>\(([0-9]+) total\)</small>', html)
-            if (total is not None) and (len(total) > 0):
-                self.page_count = int(math.ceil(int(total) / 15))
-            else:
-                self.page_count = 1
+            if self.page_count == GalleryWindow.INFINITY:
+                total = search('<small>\(([0-9]+) total\)</small>', html)
+                if (total is not None) and (len(total) > 0):
+                    self.page_count = int(math.ceil(int(total) / 15))
+                else:
+                    self.page_count = 1
 
             tab = search('<Table class="file_block">(.*?)</Table>', html)
             self.reconfigure_buttons(self.image_buttons, tab)
@@ -1207,8 +1218,6 @@ class GalleryWindow:
             print(error)
             traceback.print_exc()
             return False
-        finally:
-            root.after_idle(self.set_controls_state, NORMAL)
 
         root.after_idle(self.sv_page.set, self.page)
 
@@ -1289,7 +1298,7 @@ class GalleryWindow:
                         photo_image, bg_color)
 
     def load_image(self, url):
-        executor.submit(self.parent_window.load_page_in_thread, url)
+        self.parent_window.load_page_in_thread(url)
 
     def reconfigure_buttons(self, buttons, html):
         http_session = requests.Session()
