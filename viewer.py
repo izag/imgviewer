@@ -61,6 +61,8 @@ class MainWindow:
         self.hist_stack = []
         self.fwd_stack = []
         self.interrupt = False
+        self.thumb_url = None
+        self.image_url = None
 
         self.menu_bar = Menu(root)
         self.menu_bar.add_command(label="<< Back", command=self.back_in_history)
@@ -125,6 +127,7 @@ class MainWindow:
             traceback.print_exc()
 
         self.btn_image = Button(frm_image, command=self.resize_image)
+        self.btn_image.bind("<Button-3>", self.load_original_image_in_thread)
         self.btn_image.pack()
 
         self.left_buttons = self.fill_panel(frm_left)
@@ -321,13 +324,13 @@ class MainWindow:
         return html
 
     def render_page(self, ident, html, http_session):
-        thumb_url = get_thumb(html)
-        if len(thumb_url) == 0:
+        self.thumb_url = get_thumb(html)
+        if (self.thumb_url is None) or (len(self.thumb_url) == 0):
             print("len(thumb_url) == 0")
             return False
 
-        slash_pos = thumb_url.rfind('/')
-        self.thumb_prefix = thumb_url[: slash_pos + 1]
+        slash_pos = self.thumb_url.rfind('/')
+        self.thumb_prefix = self.thumb_url[: slash_pos + 1]
 
         self.gallery_url = search('href="([^"]*)">More from gallery</a>', html)
 
@@ -337,16 +340,16 @@ class MainWindow:
         executor.submit(self.reconfigure_left_buttons, html)
         executor.submit(self.reconfigure_right_buttons, html)
 
-        image_url = self.provider.get_image_url(html)
+        self.image_url = self.provider.get_image_url(html)
 
-        fname = get_filename(image_url)
+        fname = get_filename(self.image_url)
         dot_pos = fname.rfind('.')
         self.original_image_name = fname[: dot_pos] + '_' + ident
         self.original_image = self.get_from_cache(self.original_image_name)
 
         bg_color = 'green'
         if (self.original_image is None) or (len(self.original_image) == 0):
-            response = http_session.get(image_url, proxies=self.proxies, timeout=TIMEOUT)
+            response = http_session.get(self.thumb_url, proxies=self.proxies, timeout=TIMEOUT)
             if response.status_code == 404:
                 print("image_url response.status_code == 404")
                 return False
@@ -359,6 +362,9 @@ class MainWindow:
 
             self.put_to_cache(self.original_image_name, self.original_image)
             bg_color = 'red'
+            self.resized = False
+        else:
+            self.resized = True
 
         img = Image.open(io.BytesIO(self.original_image))
         w, h = img.size
@@ -367,11 +373,12 @@ class MainWindow:
 
         root.after_idle(root.title, f"{root.title()} ({w}x{h})")
 
-        self.resized = True
         self.main_image_orig = ImageTk.PhotoImage(img)
         self.main_image = ImageTk.PhotoImage(img_resized)
+
+        photo_image = self.main_image if self.resized else self.main_image_orig
         root.after_idle(self.btn_image.config,
-                        {'image': self.main_image, 'background': bg_color })
+                        {'image': photo_image, 'background': bg_color})
 
         if os.path.exists(os.path.join(OUTPUT, self.original_image_name)):
             root.after_idle(self.btn_save.config, {'background': 'green'})
@@ -640,6 +647,39 @@ class MainWindow:
         else:
             self.progress_bar.pack_forget()
             self.progress_bar.stop()
+
+    def load_original_image_in_thread(self, event):
+        executor.submit(self.load_original_image)
+
+    def load_original_image(self):
+        response = requests.get(self.image_url, proxies=self.proxies, timeout=TIMEOUT)
+        if response.status_code == 404:
+            print("image_url response.status_code == 404")
+            return
+
+        self.original_image = response.content
+
+        # if DEBUG:
+        #     with open(self.original_image_name, 'wb') as f:
+        #         f.write(self.original_image)
+
+        self.put_to_cache(self.original_image_name, self.original_image)
+        bg_color = 'red'
+
+        self.resized = True
+
+        img = Image.open(io.BytesIO(self.original_image))
+        w, h = img.size
+        k = MAIN_IMG_WIDTH / w
+        img_resized = img.resize((MAIN_IMG_WIDTH, int(h * k)))
+
+        root.after_idle(root.title, f"{root.title()} ({w}x{h})")
+
+        self.main_image_orig = ImageTk.PhotoImage(img)
+        self.main_image = ImageTk.PhotoImage(img_resized)
+
+        root.after_idle(self.btn_image.config,
+                        {'image': self.main_image, 'background': bg_color})
 
 
 class ScrollFrame(Frame):
