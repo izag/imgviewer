@@ -331,6 +331,9 @@ class MainWindow:
 
         slash_pos = self.thumb_url.rfind('/')
         self.thumb_prefix = self.thumb_url[: slash_pos + 1]
+        thumb_filename = self.thumb_url[slash_pos + 1:]
+        dot_pos = thumb_filename.rfind('.')
+        thumb_filename = thumb_filename[: dot_pos]
 
         self.gallery_url = search('href="([^"]*)">More from gallery</a>', html)
 
@@ -348,6 +351,11 @@ class MainWindow:
         self.original_image = self.get_from_cache(self.original_image_name)
 
         bg_color = 'green'
+        self.resized = True
+        if (self.original_image is None) or (len(self.original_image) == 0):
+            self.original_image = self.get_from_cache(thumb_filename)
+            self.resized = False
+
         if (self.original_image is None) or (len(self.original_image) == 0):
             response = http_session.get(self.thumb_url, proxies=self.proxies, timeout=TIMEOUT)
             if response.status_code == 404:
@@ -360,11 +368,9 @@ class MainWindow:
             #     with open(self.original_image_name, 'wb') as f:
             #         f.write(self.original_image)
 
-            self.put_to_cache(self.original_image_name, self.original_image)
+            self.put_to_cache(thumb_filename, self.original_image)
             bg_color = 'red'
             self.resized = False
-        else:
-            self.resized = True
 
         img = Image.open(io.BytesIO(self.original_image))
         w, h = img.size

@@ -106,3 +106,5 @@ venv.bak/
 .mypy_cache/
 *.html
 /2019*/
+/2020*/
+/cache/
