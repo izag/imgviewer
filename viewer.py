@@ -2,6 +2,7 @@ import base64
 import binascii
 import datetime
 import io
+import logging
 import math
 import os
 import re
@@ -30,6 +31,7 @@ HEADERS = {
 
 OUTPUT = datetime.datetime.now().strftime('%Y.%m.%d')
 CACHE = 'cache'
+LOGS = 'logs'
 
 TIMEOUT = (3.05, 9.05)
 PAD = 5
@@ -158,6 +160,13 @@ class MainWindow:
         self.frm_main.pack(fill=BOTH, expand=1)
         frm_status.pack(fill=X)
 
+        self.hist_logger = logging.getLogger('history')
+        self.hist_logger.setLevel(logging.INFO)
+
+        self.fh_hist = logging.FileHandler(os.path.join(LOGS, f'hist_{int(time.time())}.log'))
+        self.fh_hist.setLevel(logging.INFO)
+        self.hist_logger.addHandler(self.fh_hist)
+
     def force_load_image(self):
         self.load_page_in_thread(self.sv_url.get().strip(), True, True)
 
@@ -244,6 +253,7 @@ class MainWindow:
             if remember and (input_url is not None):
                 if len(self.hist_stack) == 0 or (input_url != self.hist_stack[-1]):
                     self.hist_stack.append(input_url)
+                    self.hist_logger.info(f'{input_url}\t{self.thumb_url}')
                 if len(self.fwd_stack) > 0 and (input_url == self.fwd_stack[-1]):
                     self.fwd_stack.pop()
                 else:
@@ -408,6 +418,8 @@ class MainWindow:
 
         root.update_idletasks()
         root.destroy()
+        self.fh_hist.close()
+        self.hist_logger.removeHandler(self.fh_hist)
 
     def calcel(self):
         self.interrupt = True
@@ -1229,8 +1241,8 @@ class GalleryWindow:
         if self.page < 1:
             self.page = 1
 
-        if self.page > self.page_count:
-            self.page = self.page_count
+        # if self.page > self.page_count:
+        #     self.page = self.page_count
 
         try:
             filename = f'{self.gallery}_{self.page:05}'
@@ -1248,7 +1260,7 @@ class GalleryWindow:
 
             html = html.decode('utf-8')
 
-            if self.page_count == GalleryWindow.INFINITY:
+            if self.page_count == GalleryWindow.INFINITY or ignore_cache:
                 total = search('<small>\(([0-9]+) total\)</small>', html)
                 if (total is not None) and (len(total) > 0):
                     self.page_count = int(math.ceil(int(total) / 15))
@@ -1406,6 +1418,9 @@ if __name__ == "__main__":
 
     if not os.path.exists(CACHE):
         os.mkdir(CACHE)
+
+    if not os.path.exists(LOGS):
+        os.mkdir(LOGS)
 
     root.geometry("1044x720+0+0")
     main_win = MainWindow()
