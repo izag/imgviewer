@@ -1,0 +1,1 @@
+python history.py ./logs/%1 > hist.html
